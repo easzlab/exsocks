@@ -18,11 +18,22 @@ use crate::socks5::protocol::REP_SUCCEEDED;
 
 pub async fn run(config: AppConfig) -> Result<(), SocksError> {
     let listener = TcpListener::bind(config.bind).await?;
-    info!("SOCKS5 server listening on {}", config.bind);
+    run_with_listener(config, listener, None).await
+}
+
+/// 使用已绑定的 listener 运行服务器，支持外部 CancellationToken 控制关闭。
+/// 用于测试场景，避免端口竞态问题。
+pub async fn run_with_listener(
+    config: AppConfig,
+    listener: TcpListener,
+    external_token: Option<CancellationToken>,
+) -> Result<(), SocksError> {
+    let addr = listener.local_addr()?;
+    info!("SOCKS5 server listening on {}", addr);
 
     let limiter = Arc::new(ConnectionLimiter::new(config.max_connections));
     let connect_timeout = Duration::from_secs(config.connect_timeout);
-    let cancel_token = CancellationToken::new();
+    let cancel_token = external_token.unwrap_or_else(CancellationToken::new);
     info!("Max connections: {}", config.max_connections);
 
     loop {
@@ -45,6 +56,10 @@ pub async fn run(config: AppConfig) -> Result<(), SocksError> {
                         }
                     }
                 }.instrument(info_span!("conn", %peer_addr)));
+            }
+            _ = cancel_token.cancelled() => {
+                info!("External shutdown signal received");
+                break;
             }
             _ = signal::ctrl_c() => {
                 info!("Shutdown signal received, stopping accept loop");

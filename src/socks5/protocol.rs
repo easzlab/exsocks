@@ -89,3 +89,59 @@ impl Address {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_address_ipv4_to_bytes() {
+        let addr = Address::IPv4(Ipv4Addr::new(192, 168, 1, 1));
+        let bytes = addr.to_bytes();
+        assert_eq!(bytes, vec![ATYP_IPV4, 192, 168, 1, 1]);
+    }
+
+    #[test]
+    fn test_address_ipv6_to_bytes() {
+        let addr = Address::IPv6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1));
+        let bytes = addr.to_bytes();
+        assert_eq!(bytes, vec![ATYP_IPV6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+    }
+
+    #[test]
+    fn test_address_domain_to_bytes() {
+        let addr = Address::Domain(String::from("example.com"));
+        let bytes = addr.to_bytes();
+        assert_eq!(bytes, vec![ATYP_DOMAIN, 11, b'e', b'x', b'a', b'm', b'p', b'l', b'e', b'.', b'c', b'o', b'm']);
+    }
+
+    #[test]
+    fn test_address_display_ipv4() {
+        let addr = Address::IPv4(Ipv4Addr::new(1, 2, 3, 4));
+        assert_eq!(format!("{}", addr), "1.2.3.4");
+    }
+
+    #[test]
+    fn test_address_display_ipv6() {
+        let addr = Address::IPv6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1));
+        assert_eq!(format!("{}", addr), "[::1]");
+    }
+
+    #[test]
+    fn test_address_display_domain() {
+        let addr = Address::Domain(String::from("example.com"));
+        assert_eq!(format!("{}", addr), "example.com");
+    }
+
+    #[test]
+    fn test_address_domain_max_length() {
+        // 域名长度为255字节（包括长度字节），这是SOCKS5协议的最大限制
+        let domain = "a".repeat(255);
+        let addr = Address::Domain(domain);
+        let bytes = addr.to_bytes();
+        // 长度字节应该为255
+        assert_eq!(bytes[1], 255);
+        // 总长度为1(ATYP) + 1(len) + 255(domain) = 257
+        assert_eq!(bytes.len(), 257);
+    }
+}
+

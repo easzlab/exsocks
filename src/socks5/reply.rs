@@ -33,3 +33,59 @@ pub async fn send_reply(
     stream.write_all(&reply).await?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{SocketAddrV4, SocketAddrV6, Ipv4Addr, Ipv6Addr};
+    use crate::socks5::protocol::*;
+
+    #[test]
+    fn test_build_reply_success_ipv4() {
+        let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 8080));
+        let reply = build_reply(REP_SUCCEEDED, addr);
+        assert_eq!(reply[0], SOCKS5_VERSION);
+        assert_eq!(reply[1], REP_SUCCEEDED);
+        assert_eq!(reply[2], 0x00);
+        assert_eq!(reply[3], ATYP_IPV4);
+        assert_eq!(reply[4..8], [127, 0, 0, 1]);
+        assert_eq!(reply[8..10], [0x1F, 0x90]); // 8080 in big-endian
+    }
+
+    #[test]
+    fn test_build_reply_success_ipv6() {
+        let addr = SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1), 443, 0, 0));
+        let reply = build_reply(REP_SUCCEEDED, addr);
+        assert_eq!(reply[0], SOCKS5_VERSION);
+        assert_eq!(reply[1], REP_SUCCEEDED);
+        assert_eq!(reply[2], 0x00);
+        assert_eq!(reply[3], ATYP_IPV6);
+        assert_eq!(reply[4..20], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+        assert_eq!(reply[20..22], [0x01, 0xBB]); // 443 in big-endian
+    }
+
+    #[test]
+    fn test_build_reply_failure() {
+        let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 0));
+        let reply = build_reply(REP_GENERAL_FAILURE, addr);
+        assert_eq!(reply[0], SOCKS5_VERSION);
+        assert_eq!(reply[1], REP_GENERAL_FAILURE);
+        assert_eq!(reply[2], 0x00);
+    }
+
+    #[test]
+    fn test_build_reply_version_byte() {
+        let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 80));
+        let reply = build_reply(REP_SUCCEEDED, addr);
+        assert_eq!(reply[0], 0x05);
+    }
+
+    #[test]
+    fn test_build_reply_port_big_endian() {
+        let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 8080));
+        let reply = build_reply(REP_SUCCEEDED, addr);
+        // 端口8080 = 0x1F90，应该编码为[0x1F, 0x90]
+        assert_eq!(reply[reply.len() - 2], 0x1F);
+        assert_eq!(reply[reply.len() - 1], 0x90);
+    }
+}

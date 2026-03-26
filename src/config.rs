@@ -102,3 +102,99 @@ impl Default for AppConfig {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::Builder;
+
+    #[test]
+    fn test_default_config() {
+        let config = AppConfig::default();
+        assert_eq!(config.bind, "127.0.0.1:1080".parse().unwrap());
+        assert_eq!(config.max_connections, 1024);
+        assert_eq!(config.connect_timeout, 10);
+        assert_eq!(config.log_dir, PathBuf::from("./logs"));
+        assert_eq!(config.log_level, "info");
+    }
+
+    #[test]
+    fn test_apply_cli_args_override() {
+        let mut config = AppConfig::default();
+        let bind = "0.0.0.0:9999".parse().unwrap();
+        let max_connections = 2048;
+        let log_dir = PathBuf::from("/var/log/exsocks");
+        let log_level = "debug".to_string();
+        let connect_timeout = 30;
+
+        config.apply_cli_args(
+            Some(bind),
+            Some(max_connections),
+            Some(log_dir.clone()),
+            Some(log_level.clone()),
+            Some(connect_timeout),
+        );
+
+        assert_eq!(config.bind, bind);
+        assert_eq!(config.max_connections, max_connections);
+        assert_eq!(config.log_dir, log_dir);
+        assert_eq!(config.log_level, log_level);
+        assert_eq!(config.connect_timeout, connect_timeout);
+    }
+
+    #[test]
+    fn test_apply_cli_args_partial() {
+        let mut config = AppConfig::default();
+        let bind = "0.0.0.0:9999".parse().unwrap();
+        let log_level = "debug".to_string();
+
+        config.apply_cli_args(
+            Some(bind),
+            None,
+            None,
+            Some(log_level.clone()),
+            None,
+        );
+
+        assert_eq!(config.bind, bind);
+        assert_eq!(config.max_connections, 1024); // 保持默认
+        assert_eq!(config.log_dir, PathBuf::from("./logs")); // 保持默认
+        assert_eq!(config.log_level, log_level);
+        assert_eq!(config.connect_timeout, 10); // 保持默认
+    }
+
+    #[test]
+    fn test_load_from_yaml() {
+        let yaml_content = r#"
+bind: "0.0.0.0:9999"
+max_connections: 2048
+connect_timeout: 30
+log_dir: "/var/log/exsocks"
+log_level: "debug"
+"#;
+
+        let mut temp_file = Builder::new().suffix(".yaml").tempfile().unwrap();
+        write!(temp_file, "{}", yaml_content).unwrap();
+
+        let path = temp_file.path().to_path_buf();
+        let config = AppConfig::load(Some(&path)).unwrap();
+        assert_eq!(config.bind, "0.0.0.0:9999".parse().unwrap());
+        assert_eq!(config.max_connections, 2048);
+        assert_eq!(config.connect_timeout, 30);
+        assert_eq!(config.log_dir, PathBuf::from("/var/log/exsocks"));
+        assert_eq!(config.log_level, "debug");
+    }
+
+    #[test]
+    fn test_load_invalid_yaml() {
+        let invalid_yaml = "invalid: yaml: content: [unclosed";
+
+        let mut temp_file = Builder::new().suffix(".yaml").tempfile().unwrap();
+        write!(temp_file, "{}", invalid_yaml).unwrap();
+
+        let path = temp_file.path().to_path_buf();
+        let result = AppConfig::load(Some(&path));
+        assert!(result.is_err());
+    }
+}

@@ -4,15 +4,9 @@ use std::path::PathBuf;
 use clap::Parser;
 use tracing::{info, error};
 
-mod config;
-mod error;
-mod limiter;
-mod relay;
-mod server;
-mod socks5;
-
-use config::AppConfig;
-use error::SocksError;
+use exsocks::config::AppConfig;
+use exsocks::error::SocksError;
+use exsocks::server;
 
 #[derive(Parser, Debug)]
 #[command(name = "exsocks")]

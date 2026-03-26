@@ -42,3 +42,55 @@ impl From<config::ConfigError> for SocksError {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_error_display_io() {
+        let io_err = io::Error::new(io::ErrorKind::Other, "test error");
+        let socks_err = SocksError::Io(io_err);
+        assert!(socks_err.to_string().contains("IO error"));
+    }
+
+    #[test]
+    fn test_error_display_invalid_version() {
+        let err = SocksError::InvalidVersion(0x04);
+        let display = err.to_string();
+        assert!(display.contains("expected 0x05"));
+        assert!(display.contains("got 0x04"));
+    }
+
+    #[test]
+    fn test_error_display_no_acceptable_auth() {
+        let err = SocksError::NoAcceptableAuthMethod;
+        let display = err.to_string();
+        assert!(display.contains("No acceptable authentication method"));
+    }
+
+    #[test]
+    fn test_error_display_unsupported_command() {
+        let err = SocksError::UnsupportedCommand(0x02);
+        assert!(err.to_string().contains("0x02"));
+    }
+
+    #[test]
+    fn test_error_display_connection_limit() {
+        let err = SocksError::ConnectionLimitExceeded(1024);
+        assert!(err.to_string().contains("max: 1024"));
+    }
+
+    #[test]
+    fn test_from_io_error() {
+        let io_err = io::Error::new(io::ErrorKind::Other, "test");
+        let socks_err = SocksError::from(io_err);
+        assert!(matches!(socks_err, SocksError::Io(_)));
+    }
+
+    #[test]
+    fn test_from_config_error() {
+        let config_err = config::ConfigError::NotFound("test".into());
+        let socks_err = SocksError::from(config_err);
+        assert!(matches!(socks_err, SocksError::Config(_)));
+    }
+}
