@@ -18,6 +18,11 @@ bind: "0.0.0.0:1080"
 # 默认: 1024
 max_connections: 2048
 
+# 连接目标的超时时间（秒）
+# 如果目标主机在此时间内未响应，连接将被中断
+# 默认: 10
+connect_timeout: 10
+
 # 日志文件目录
 # 日志文件按天滚动，格式: exsocks.YYYY-MM-DD.log
 # 默认: ./logs

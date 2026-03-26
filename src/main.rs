@@ -68,7 +68,7 @@ async fn main() -> Result<(), SocksError> {
     let mut config = AppConfig::load(args.config.as_ref())
         .map_err(|e| SocksError::Config(e.to_string()))?;
 
-    config.apply_cli_args(args.bind, args.max_connections, args.log_dir.clone(), args.log_level.clone());
+    config.apply_cli_args(args.bind, args.max_connections, args.log_dir.clone(), args.log_level.clone(), None);
 
     let _guard = init_logging(&config.log_dir, &config.log_level);
 

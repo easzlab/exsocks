@@ -16,6 +16,10 @@ fn default_log_dir() -> PathBuf {
     PathBuf::from("./logs")
 }
 
+fn default_connect_timeout() -> u64 {
+    10
+}
+
 fn default_log_level() -> String {
     "info".to_string()
 }
@@ -26,6 +30,8 @@ pub struct AppConfig {
     pub bind: SocketAddr,
     #[serde(default = "default_max_connections")]
     pub max_connections: usize,
+    #[serde(default = "default_connect_timeout")]
+    pub connect_timeout: u64,
     #[serde(default = "default_log_dir")]
     pub log_dir: PathBuf,
     #[serde(default = "default_log_level")]
@@ -37,6 +43,7 @@ impl AppConfig {
         let mut builder = ConfigBuilder::builder()
             .set_default("bind", default_bind().to_string())?
             .set_default("max_connections", default_max_connections() as i64)?
+            .set_default("connect_timeout", default_connect_timeout() as i64)?
             .set_default("log_dir", default_log_dir().to_str().unwrap())?
             .set_default("log_level", default_log_level())?;
 
@@ -65,7 +72,7 @@ impl AppConfig {
         config.try_deserialize()
     }
 
-    pub fn apply_cli_args(&mut self, bind: Option<SocketAddr>, max_connections: Option<usize>, log_dir: Option<PathBuf>, log_level: Option<String>) {
+    pub fn apply_cli_args(&mut self, bind: Option<SocketAddr>, max_connections: Option<usize>, log_dir: Option<PathBuf>, log_level: Option<String>, connect_timeout: Option<u64>) {
         if let Some(bind) = bind {
             self.bind = bind;
         }
@@ -78,6 +85,9 @@ impl AppConfig {
         if let Some(level) = log_level {
             self.log_level = level;
         }
+        if let Some(timeout) = connect_timeout {
+            self.connect_timeout = timeout;
+        }
     }
 }
 
@@ -86,6 +96,7 @@ impl Default for AppConfig {
         Self {
             bind: default_bind(),
             max_connections: default_max_connections(),
+            connect_timeout: default_connect_timeout(),
             log_dir: default_log_dir(),
             log_level: default_log_level(),
         }

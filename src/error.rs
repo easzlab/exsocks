@@ -26,6 +26,9 @@ pub enum SocksError {
     #[error("Failed to connect to target: {0}")]
     ConnectFailed(String),
 
+    #[error("Connect to target timed out")]
+    ConnectTimeout,
+
     #[error("Configuration error: {0}")]
     Config(String),
 
