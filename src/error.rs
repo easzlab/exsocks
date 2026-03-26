@@ -39,9 +39,3 @@ impl From<config::ConfigError> for SocksError {
     }
 }
 
-#[cfg(target_os = "linux")]
-impl From<nix::Error> for SocksError {
-    fn from(e: nix::Error) -> Self {
-        SocksError::Io(std::io::Error::from_raw_os_error(e as i32))
-    }
-}
