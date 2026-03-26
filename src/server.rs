@@ -20,6 +20,7 @@ pub async fn run(config: AppConfig) -> Result<(), SocksError> {
 
     loop {
         let (socket, peer_addr) = listener.accept().await?;
+        socket.set_nodelay(true)?;
         let limiter = limiter.clone();
 
         tokio::spawn(async move {
@@ -37,7 +38,13 @@ async fn handle_connection(
 ) -> Result<(), SocksError> {
     debug!(%peer_addr, "New connection");
 
-    let _permit = limiter.acquire().await?;
+    let _permit = match limiter.acquire() {
+        Ok(permit) => permit,
+        Err(e) => {
+            debug!(%peer_addr, "Connection rejected: limit exceeded");
+            return Err(e);
+        }
+    };
     debug!(%peer_addr, available = limiter.available(), "Connection permit acquired");
 
     socks5::perform_handshake(&mut socket).await?;
@@ -46,13 +53,14 @@ async fn handle_connection(
     let request = socks5::parse_request(&mut socket).await?;
     debug!(%peer_addr, target = %request.address, port = request.port, "CONNECT request");
 
-    let target = match TcpStream::connect((request.address.to_host(), request.port)).await {
+    let target = match request.address.connect(request.port).await {
         Ok(stream) => stream,
         Err(e) => {
             error!(%peer_addr, error = %e, "Failed to connect to target");
-            return Err(SocksError::ConnectFailed(e.to_string()));
+            return Err(e);
         }
     };
+    target.set_nodelay(true)?;
 
     let bind_addr = target.local_addr()?;
     socks5::send_reply(&mut socket, REP_SUCCEEDED, bind_addr).await?;

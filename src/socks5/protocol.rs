@@ -1,7 +1,11 @@
 #![allow(dead_code)]
 
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::fmt;
+
+use tokio::net::TcpStream;
+
+use crate::error::SocksError;
 
 pub const SOCKS5_VERSION: u8 = 0x05;
 
@@ -67,12 +71,20 @@ impl fmt::Display for Address {
 }
 
 impl Address {
-    /// 转换为用于 TCP 连接的主机字符串（不含端口）
-    pub fn to_host(&self) -> String {
+    /// 直接建立 TCP 连接，避免 IPv4/IPv6 地址经过 format → parse 的不必要堆分配。
+    pub async fn connect(&self, port: u16) -> Result<TcpStream, SocksError> {
         match self {
-            Address::IPv4(addr) => addr.to_string(),
-            Address::IPv6(addr) => addr.to_string(),
-            Address::Domain(domain) => domain.clone(),
+            Address::IPv4(addr) => {
+                let sock_addr = SocketAddr::new(IpAddr::V4(*addr), port);
+                Ok(TcpStream::connect(sock_addr).await?)
+            }
+            Address::IPv6(addr) => {
+                let sock_addr = SocketAddr::new(IpAddr::V6(*addr), port);
+                Ok(TcpStream::connect(sock_addr).await?)
+            }
+            Address::Domain(domain) => {
+                Ok(TcpStream::connect((domain.as_str(), port)).await?)
+            }
         }
     }
 }

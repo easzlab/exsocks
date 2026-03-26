@@ -18,10 +18,10 @@ pub async fn perform_handshake(stream: &mut TcpStream) -> Result<(), SocksError>
         return Err(SocksError::NoAcceptableAuthMethod);
     }
 
-    let mut methods = vec![0u8; nmethods];
-    stream.read_exact(&mut methods).await?;
+    let mut methods = [0u8; 255];
+    stream.read_exact(&mut methods[..nmethods]).await?;
 
-    if !methods.contains(&AUTH_NO_AUTH) {
+    if !methods[..nmethods].contains(&AUTH_NO_AUTH) {
         stream.write_all(&[SOCKS5_VERSION, AUTH_NO_ACCEPTABLE]).await?;
         return Err(SocksError::NoAcceptableAuthMethod);
     }

@@ -18,8 +18,9 @@ impl ConnectionLimiter {
         }
     }
 
-    pub async fn acquire(&self) -> Result<OwnedSemaphorePermit, SocksError> {
-        match self.semaphore.clone().acquire_owned().await {
+    /// 尝试获取连接许可，超限时立即拒绝而非阻塞等待。
+    pub fn acquire(&self) -> Result<OwnedSemaphorePermit, SocksError> {
+        match self.semaphore.clone().try_acquire_owned() {
             Ok(permit) => Ok(permit),
             Err(_) => Err(SocksError::ConnectionLimitExceeded(self.max_connections)),
         }
