@@ -54,7 +54,8 @@ impl AppConfig {
         }
 
         // 加载当前目录配置文件
-        builder = builder.add_source(File::from(PathBuf::from("./config/server.yaml")).required(false));
+        builder =
+            builder.add_source(File::from(PathBuf::from("./config/server.yaml")).required(false));
 
         // 加载指定配置文件（如果提供）
         if let Some(path) = config_file {
@@ -72,7 +73,14 @@ impl AppConfig {
         config.try_deserialize()
     }
 
-    pub fn apply_cli_args(&mut self, bind: Option<SocketAddr>, max_connections: Option<usize>, log_dir: Option<PathBuf>, log_level: Option<String>, connect_timeout: Option<u64>) {
+    pub fn apply_cli_args(
+        &mut self,
+        bind: Option<SocketAddr>,
+        max_connections: Option<usize>,
+        log_dir: Option<PathBuf>,
+        log_level: Option<String>,
+        connect_timeout: Option<u64>,
+    ) {
         if let Some(bind) = bind {
             self.bind = bind;
         }
@@ -149,13 +157,7 @@ mod tests {
         let bind = "0.0.0.0:9999".parse().unwrap();
         let log_level = "debug".to_string();
 
-        config.apply_cli_args(
-            Some(bind),
-            None,
-            None,
-            Some(log_level.clone()),
-            None,
-        );
+        config.apply_cli_args(Some(bind), None, None, Some(log_level.clone()), None);
 
         assert_eq!(config.bind, bind);
         assert_eq!(config.max_connections, 1024); // 保持默认

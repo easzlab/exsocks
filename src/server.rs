@@ -6,8 +6,8 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::signal;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, error, debug, info_span};
 use tracing::Instrument;
+use tracing::{debug, error, info, info_span};
 
 use crate::config::AppConfig;
 use crate::error::SocksError;
@@ -110,7 +110,11 @@ async fn handle_connection(
     info!(target = %request.address, port = request.port, "Established");
 
     let (client_to_target, target_to_client) = relay::relay(socket, target).await?;
-    info!(bytes_up = client_to_target, bytes_down = target_to_client, "Closed");
+    info!(
+        bytes_up = client_to_target,
+        bytes_down = target_to_client,
+        "Closed"
+    );
 
     Ok(())
 }

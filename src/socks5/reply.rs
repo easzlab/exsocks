@@ -2,16 +2,12 @@ use std::net::SocketAddr;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
+use super::protocol::{Address, SOCKS5_VERSION};
 use crate::error::SocksError;
-use super::protocol::{SOCKS5_VERSION, Address};
 
 /// 构建 SOCKS5 响应报文。
 pub fn build_reply(status: u8, bind_addr: SocketAddr) -> Vec<u8> {
-    let mut reply = vec![
-        SOCKS5_VERSION,
-        status,
-        0x00,
-    ];
+    let mut reply = vec![SOCKS5_VERSION, status, 0x00];
 
     let (addr_bytes, port) = match bind_addr {
         SocketAddr::V4(addr) => (Address::IPv4(*addr.ip()).to_bytes(), addr.port()),
@@ -37,8 +33,8 @@ pub async fn send_reply(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::{SocketAddrV4, SocketAddrV6, Ipv4Addr, Ipv6Addr};
     use crate::socks5::protocol::*;
+    use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
 
     #[test]
     fn test_build_reply_success_ipv4() {
@@ -54,13 +50,21 @@ mod tests {
 
     #[test]
     fn test_build_reply_success_ipv6() {
-        let addr = SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1), 443, 0, 0));
+        let addr = SocketAddr::V6(SocketAddrV6::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1),
+            443,
+            0,
+            0,
+        ));
         let reply = build_reply(REP_SUCCEEDED, addr);
         assert_eq!(reply[0], SOCKS5_VERSION);
         assert_eq!(reply[1], REP_SUCCEEDED);
         assert_eq!(reply[2], 0x00);
         assert_eq!(reply[3], ATYP_IPV6);
-        assert_eq!(reply[4..20], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+        assert_eq!(
+            reply[4..20],
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+        );
         assert_eq!(reply[20..22], [0x01, 0xBB]); // 443 in big-endian
     }
 

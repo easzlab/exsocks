@@ -2,13 +2,13 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-use crate::error::SocksError;
+use super::protocol::Address;
 use super::protocol::{
-    SOCKS5_VERSION, CMD_CONNECT, ATYP_IPV4, ATYP_DOMAIN, ATYP_IPV6,
-    REP_COMMAND_NOT_SUPPORTED, REP_ADDRESS_TYPE_NOT_SUPPORTED,
+    ATYP_DOMAIN, ATYP_IPV4, ATYP_IPV6, CMD_CONNECT, REP_ADDRESS_TYPE_NOT_SUPPORTED,
+    REP_COMMAND_NOT_SUPPORTED, SOCKS5_VERSION,
 };
 use super::reply::build_reply;
-use super::protocol::Address;
+use crate::error::SocksError;
 
 pub struct ConnectRequest {
     pub address: Address,
@@ -43,10 +43,9 @@ pub async fn parse_request(stream: &mut TcpStream) -> Result<ConnectRequest, Soc
             let len = len_buf[0] as usize;
             let mut domain_buf = vec![0u8; len];
             stream.read_exact(&mut domain_buf).await?;
-            Address::Domain(String::from_utf8(domain_buf)
-                .map_err(|e| SocksError::InvalidAddress(
-                    format!("Invalid domain encoding: {}", e)
-                ))?)
+            Address::Domain(String::from_utf8(domain_buf).map_err(|e| {
+                SocksError::InvalidAddress(format!("Invalid domain encoding: {}", e))
+            })?)
         }
         ATYP_IPV6 => {
             let mut buf = [0u8; 16];

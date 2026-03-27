@@ -16,10 +16,11 @@ use crate::error::SocksError;
 
 #[cfg(target_os = "linux")]
 mod linux_splice {
-    use std::os::unix::io::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::fd::BorrowedFd;
+    use std::os::unix::io::{AsRawFd, OwnedFd};
     use std::sync::Arc;
 
-    use nix::fcntl::{splice, SpliceFFlags};
+    use nix::fcntl::{SpliceFFlags, splice};
     use nix::unistd::pipe;
     use tokio::net::TcpStream;
 
@@ -38,28 +39,32 @@ mod linux_splice {
     /// CPU，当对端 fd 最终关闭时（Arc 引用归零），splice 返回错误从而退出循环。
     ///
     /// 写端 splice 使用阻塞式（无 NONBLOCK），确保管道中的数据完整写出到目标 socket。
+    ///
+    /// # Safety
+    /// `src_fd` 和 `dst_fd` 在调用期间必须保持有效（由调用方通过 Arc 保证）。
     fn splice_loop(src_fd: i32, dst_fd: i32) -> std::io::Result<u64> {
-        let (pipe_read_raw, pipe_write_raw) = pipe()
-            .map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
-        let pipe_read = unsafe { OwnedFd::from_raw_fd(pipe_read_raw) };
-        let pipe_write = unsafe { OwnedFd::from_raw_fd(pipe_write_raw) };
-
-        let pipe_r = pipe_read.as_raw_fd();
-        let pipe_w = pipe_write.as_raw_fd();
+        let (pipe_read, pipe_write): (OwnedFd, OwnedFd) =
+            pipe().map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
 
         let mut total: u64 = 0;
 
         loop {
+            // SAFETY: src_fd 由调用方 Arc<TcpStream> 保证在整个 splice_loop 期间有效。
+            let src = unsafe { BorrowedFd::borrow_raw(src_fd) };
+            let pipe_w = unsafe { BorrowedFd::borrow_raw(pipe_write.as_raw_fd()) };
+
             // splice: src_fd -> pipe_w（读端非阻塞）
             let bytes_read = match splice(
-                src_fd, None,
-                pipe_w, None,
+                src,
+                None,
+                pipe_w,
+                None,
                 SPLICE_BUF_SIZE,
                 SpliceFFlags::SPLICE_F_MOVE | SpliceFFlags::SPLICE_F_NONBLOCK,
             ) {
                 Ok(0) => break, // EOF
                 Ok(n) => n,
-                Err(nix::errno::Errno::EAGAIN) | Err(nix::errno::Errno::EWOULDBLOCK) => {
+                Err(nix::errno::Errno::EAGAIN) => {
                     std::thread::yield_now();
                     continue;
                 }
@@ -69,9 +74,15 @@ mod linux_splice {
             // splice: pipe_r -> dst_fd（写端阻塞，确保数据完整写出）
             let mut remaining = bytes_read;
             while remaining > 0 {
+                // SAFETY: dst_fd 由调用方 Arc<TcpStream> 保证在整个 splice_loop 期间有效。
+                let dst = unsafe { BorrowedFd::borrow_raw(dst_fd) };
+                let pipe_r = unsafe { BorrowedFd::borrow_raw(pipe_read.as_raw_fd()) };
+
                 match splice(
-                    pipe_r, None,
-                    dst_fd, None,
+                    pipe_r,
+                    None,
+                    dst,
+                    None,
                     remaining,
                     SpliceFFlags::SPLICE_F_MOVE,
                 ) {
@@ -164,10 +175,7 @@ mod generic_relay {
 ///
 /// - Linux：使用 splice(2) 零拷贝
 /// - 其他平台：使用 tokio::io::copy_bidirectional
-pub async fn relay(
-    client: TcpStream,
-    target: TcpStream,
-) -> Result<(u64, u64), SocksError> {
+pub async fn relay(client: TcpStream, target: TcpStream) -> Result<(u64, u64), SocksError> {
     #[cfg(target_os = "linux")]
     {
         linux_splice::relay_splice(client, target).await

@@ -1,8 +1,8 @@
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
+use super::protocol::{AUTH_NO_ACCEPTABLE, AUTH_NO_AUTH, SOCKS5_VERSION};
 use crate::error::SocksError;
-use super::protocol::{SOCKS5_VERSION, AUTH_NO_AUTH, AUTH_NO_ACCEPTABLE};
 
 pub async fn perform_handshake(stream: &mut TcpStream) -> Result<(), SocksError> {
     let mut buf = [0u8; 2];
@@ -22,7 +22,9 @@ pub async fn perform_handshake(stream: &mut TcpStream) -> Result<(), SocksError>
     stream.read_exact(&mut methods[..nmethods]).await?;
 
     if !methods[..nmethods].contains(&AUTH_NO_AUTH) {
-        stream.write_all(&[SOCKS5_VERSION, AUTH_NO_ACCEPTABLE]).await?;
+        stream
+            .write_all(&[SOCKS5_VERSION, AUTH_NO_ACCEPTABLE])
+            .await?;
         return Err(SocksError::NoAcceptableAuthMethod);
     }
 

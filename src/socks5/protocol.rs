@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::fmt;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use tokio::net::TcpStream;
 
@@ -82,9 +82,7 @@ impl Address {
                 let sock_addr = SocketAddr::new(IpAddr::V6(*addr), port);
                 Ok(TcpStream::connect(sock_addr).await?)
             }
-            Address::Domain(domain) => {
-                Ok(TcpStream::connect((domain.as_str(), port)).await?)
-            }
+            Address::Domain(domain) => Ok(TcpStream::connect((domain.as_str(), port)).await?),
         }
     }
 }
@@ -104,14 +102,34 @@ mod tests {
     fn test_address_ipv6_to_bytes() {
         let addr = Address::IPv6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1));
         let bytes = addr.to_bytes();
-        assert_eq!(bytes, vec![ATYP_IPV6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+        assert_eq!(
+            bytes,
+            vec![ATYP_IPV6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+        );
     }
 
     #[test]
     fn test_address_domain_to_bytes() {
         let addr = Address::Domain(String::from("example.com"));
         let bytes = addr.to_bytes();
-        assert_eq!(bytes, vec![ATYP_DOMAIN, 11, b'e', b'x', b'a', b'm', b'p', b'l', b'e', b'.', b'c', b'o', b'm']);
+        assert_eq!(
+            bytes,
+            vec![
+                ATYP_DOMAIN,
+                11,
+                b'e',
+                b'x',
+                b'a',
+                b'm',
+                b'p',
+                b'l',
+                b'e',
+                b'.',
+                b'c',
+                b'o',
+                b'm'
+            ]
+        );
     }
 
     #[test]
@@ -144,4 +162,3 @@ mod tests {
         assert_eq!(bytes.len(), 257);
     }
 }
-

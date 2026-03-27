@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use std::sync::Arc;
-use tokio::sync::{Semaphore, OwnedSemaphorePermit};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::error::SocksError;
 
@@ -58,7 +58,10 @@ mod tests {
         let _permit1 = limiter.acquire().unwrap();
         let _permit2 = limiter.acquire().unwrap();
         let result = limiter.acquire();
-        assert!(matches!(result, Err(SocksError::ConnectionLimitExceeded(2))));
+        assert!(matches!(
+            result,
+            Err(SocksError::ConnectionLimitExceeded(2))
+        ));
     }
 
     #[test]

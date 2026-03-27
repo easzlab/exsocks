@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use clap::Parser;
-use tracing::{info, error};
+use tracing::{error, info};
 
 use exsocks::config::AppConfig;
 use exsocks::error::SocksError;
@@ -59,10 +59,16 @@ fn init_logging(log_dir: &PathBuf, log_level: &str) -> tracing_appender::non_blo
 async fn main() -> Result<(), SocksError> {
     let args = Args::parse();
 
-    let mut config = AppConfig::load(args.config.as_ref())
-        .map_err(|e| SocksError::Config(e.to_string()))?;
+    let mut config =
+        AppConfig::load(args.config.as_ref()).map_err(|e| SocksError::Config(e.to_string()))?;
 
-    config.apply_cli_args(args.bind, args.max_connections, args.log_dir.clone(), args.log_level.clone(), None);
+    config.apply_cli_args(
+        args.bind,
+        args.max_connections,
+        args.log_dir.clone(),
+        args.log_level.clone(),
+        None,
+    );
 
     let _guard = init_logging(&config.log_dir, &config.log_level);
 
