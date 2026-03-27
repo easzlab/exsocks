@@ -24,6 +24,13 @@ fn default_log_level() -> String {
     "info".to_string()
 }
 
+/// 默认转发缓冲区大小：64 KiB
+///
+/// 与 Linux 默认 pipe 容量和常见 TCP 窗口大小对齐
+fn default_relay_buffer_size() -> usize {
+    65536
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AppConfig {
     #[serde(default = "default_bind")]
@@ -36,6 +43,9 @@ pub struct AppConfig {
     pub log_dir: PathBuf,
     #[serde(default = "default_log_level")]
     pub log_level: String,
+    /// 转发缓冲区大小（字节），默认 65536 (64 KiB)
+    #[serde(default = "default_relay_buffer_size")]
+    pub relay_buffer_size: usize,
 }
 
 impl AppConfig {
@@ -45,7 +55,8 @@ impl AppConfig {
             .set_default("max_connections", default_max_connections() as i64)?
             .set_default("connect_timeout", default_connect_timeout() as i64)?
             .set_default("log_dir", default_log_dir().to_str().unwrap())?
-            .set_default("log_level", default_log_level())?;
+            .set_default("log_level", default_log_level())?
+            .set_default("relay_buffer_size", default_relay_buffer_size() as i64)?;
 
         // 加载系统配置文件
         if let Some(config_dir) = dirs::config_dir() {
@@ -107,6 +118,7 @@ impl Default for AppConfig {
             connect_timeout: default_connect_timeout(),
             log_dir: default_log_dir(),
             log_level: default_log_level(),
+            relay_buffer_size: default_relay_buffer_size(),
         }
     }
 }
@@ -125,6 +137,7 @@ mod tests {
         assert_eq!(config.connect_timeout, 10);
         assert_eq!(config.log_dir, PathBuf::from("./logs"));
         assert_eq!(config.log_level, "info");
+        assert_eq!(config.relay_buffer_size, 65536);
     }
 
     #[test]

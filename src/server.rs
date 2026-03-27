@@ -33,6 +33,7 @@ pub async fn run_with_listener(
 
     let limiter = Arc::new(ConnectionLimiter::new(config.max_connections));
     let connect_timeout = Duration::from_secs(config.connect_timeout);
+    let relay_buffer_size = config.relay_buffer_size;
     let cancel_token = external_token.unwrap_or_else(CancellationToken::new);
     info!("Max connections: {}", config.max_connections);
 
@@ -45,15 +46,9 @@ pub async fn run_with_listener(
                 let token = cancel_token.child_token();
 
                 tokio::spawn(async move {
-                    tokio::select! {
-                        result = handle_connection(socket, peer_addr, limiter, connect_timeout) => {
-                            if let Err(e) = result {
-                                error!(error = %e, "Connection error");
-                            }
-                        }
-                        _ = token.cancelled() => {
-                            debug!("Connection cancelled by shutdown");
-                        }
+                    let result = handle_connection(socket, peer_addr, limiter, connect_timeout, relay_buffer_size, token).await;
+                    if let Err(e) = result {
+                        error!(error = %e, "Connection error");
                     }
                 }.instrument(info_span!("conn", %peer_addr)));
             }
@@ -78,6 +73,8 @@ async fn handle_connection(
     _peer_addr: SocketAddr,
     limiter: Arc<ConnectionLimiter>,
     connect_timeout: Duration,
+    relay_buffer_size: usize,
+    cancel: CancellationToken,
 ) -> Result<(), SocksError> {
     let _permit = match limiter.acquire() {
         Ok(permit) => permit,
@@ -109,7 +106,7 @@ async fn handle_connection(
     socks5::send_reply(&mut socket, REP_SUCCEEDED, bind_addr).await?;
     info!(target = %request.address, port = request.port, "Established");
 
-    let (client_to_target, target_to_client) = relay::relay(socket, target).await?;
+    let (client_to_target, target_to_client) = relay::relay(socket, target, relay_buffer_size, cancel).await?;
     info!(
         bytes_up = client_to_target,
         bytes_down = target_to_client,

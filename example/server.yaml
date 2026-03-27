@@ -33,3 +33,10 @@ log_dir: "/var/log/exsocks"
 # 也可通过环境变量 RUST_LOG 设置更细粒度的级别
 # 默认: info
 log_level: "info"
+
+# 转发缓冲区大小（字节）
+# 用于 client <-> target 之间的数据转发
+# 较大的缓冲区可减少系统调用次数，提升大数据传输吞吐量
+# 建议范围: 16384 (16KB) ~ 262144 (256KB)
+# 默认: 65536 (64KB)
+relay_buffer_size: 65536

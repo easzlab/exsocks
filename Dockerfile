@@ -3,6 +3,10 @@
 # ==========================================
 FROM rust:1-slim-bookworm AS builder
 
+ARG APP_VERSION
+ARG GIT_COMMIT
+ARG BUILD_TIME
+
 WORKDIR /app
 
 # 1. 先复制依赖文件，利用 Docker 缓存层
@@ -24,6 +28,11 @@ RUN touch src/main.rs && \
 # 阶段 2: 运行阶段 (Runtime)
 # ==========================================
 FROM debian:bookworm-slim AS runtime
+
+# 元数据
+LABEL org.opencontainers.image.version="${APP_VERSION}"
+LABEL org.opencontainers.image.revision="${GIT_COMMIT}"
+LABEL org.opencontainers.image.created="${BUILD_TIME}"
 
 WORKDIR /app
 
