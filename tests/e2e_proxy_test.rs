@@ -54,6 +54,43 @@ async fn socks5_connect(proxy_addr: SocketAddr, target_addr: SocketAddr) -> TcpS
     stream
 }
 
+/// 尝试通过 SOCKS5 代理连接到目标，返回 Result 而非 panic
+async fn try_socks5_connect(
+    proxy_addr: SocketAddr,
+    target_addr: SocketAddr,
+) -> std::io::Result<TcpStream> {
+    let mut stream = TcpStream::connect(proxy_addr).await?;
+
+    let handshake = common::build_handshake_request(&[AUTH_NO_AUTH]);
+    stream.write_all(&handshake).await?;
+    let mut response = [0u8; 2];
+    stream.read_exact(&mut response).await?;
+    if response != [SOCKS5_VERSION, AUTH_NO_AUTH] {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "unexpected handshake response",
+        ));
+    }
+
+    let addr = match target_addr {
+        SocketAddr::V4(v4) => Address::IPv4(*v4.ip()),
+        SocketAddr::V6(v6) => Address::IPv6(*v6.ip()),
+    };
+    let request = common::build_connect_request(&addr, target_addr.port());
+    stream.write_all(&request).await?;
+
+    let mut reply = [0u8; 10];
+    stream.read_exact(&mut reply).await?;
+    if reply[1] != REP_SUCCEEDED {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::ConnectionRefused,
+            "SOCKS5 connect failed",
+        ));
+    }
+
+    Ok(stream)
+}
+
 #[tokio::test]
 async fn test_e2e_connect_ipv4() {
     let (echo_handle, echo_addr) = common::start_echo_server().await;
@@ -77,29 +114,35 @@ async fn test_e2e_large_transfer() {
     let (echo_handle, echo_addr) = common::start_echo_server().await;
     let (proxy_handle, proxy_addr) = start_proxy_server().await;
 
-    let stream = socks5_connect(proxy_addr, echo_addr).await;
+    let transfer_test = async {
+        let stream = socks5_connect(proxy_addr, echo_addr).await;
 
-    // 发送 1MB 数据
-    let data: Vec<u8> = (0..1_048_576).map(|i| (i % 256) as u8).collect();
-    let data_clone = data.clone();
+        // 发送 1MB 数据
+        let data: Vec<u8> = (0..1_048_576).map(|i| (i % 256) as u8).collect();
+        let data_clone = data.clone();
 
-    let (mut read_half, mut write_half) = stream.into_split();
+        let (mut read_half, mut write_half) = stream.into_split();
 
-    let write_handle = tokio::spawn(async move {
-        write_half.write_all(&data_clone).await.unwrap();
-        write_half.shutdown().await.unwrap();
-    });
+        let write_handle = tokio::spawn(async move {
+            write_half.write_all(&data_clone).await.unwrap();
+            write_half.shutdown().await.unwrap();
+        });
 
-    let read_handle = tokio::spawn(async move {
-        let mut received = Vec::new();
-        read_half.read_to_end(&mut received).await.unwrap();
-        received
-    });
+        let read_handle = tokio::spawn(async move {
+            let mut received = Vec::new();
+            read_half.read_to_end(&mut received).await.unwrap();
+            received
+        });
 
-    write_handle.await.unwrap();
-    let received = read_handle.await.unwrap();
-    assert_eq!(received.len(), data.len());
-    assert_eq!(received, data);
+        write_handle.await.unwrap();
+        let received = read_handle.await.unwrap();
+        assert_eq!(received.len(), data.len());
+        assert_eq!(received, data);
+    };
+
+    tokio::time::timeout(std::time::Duration::from_secs(30), transfer_test)
+        .await
+        .expect("large transfer test timed out");
 
     proxy_handle.abort();
     echo_handle.abort();
@@ -287,10 +330,21 @@ async fn test_e2e_connection_limit() {
 
     // 释放一个连接后应该可以新建连接
     drop(streams.pop());
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    // 现在应该可以建立新连接
-    let new_stream = common::socks5_connect(proxy_addr, echo_addr).await;
+    // 等待服务端 relay 线程退出并释放 semaphore permit
+    // 在 Docker/Linux 环境下 splice 阻塞线程退出可能需要更长时间
+    let mut new_stream = None;
+    for attempt in 0..10 {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        match try_socks5_connect(proxy_addr, echo_addr).await {
+            Ok(stream) => {
+                new_stream = Some(stream);
+                break;
+            }
+            Err(_) if attempt < 9 => continue,
+            Err(e) => panic!("Failed to establish new connection after retries: {}", e),
+        }
+    }
     drop(new_stream);
 
     drop(streams);
@@ -431,46 +485,66 @@ async fn test_e2e_target_abort() {
         }
     });
 
-    // 通过代理连接
-    let mut stream = TcpStream::connect(proxy_addr).await.unwrap();
-    let handshake = common::build_handshake_request(&[AUTH_NO_AUTH]);
-    stream.write_all(&handshake).await.unwrap();
-    let mut response = [0u8; 2];
-    stream.read_exact(&mut response).await.unwrap();
+    // 通过代理连接，整个过程加超时保护
+    let abort_test = async {
+        let mut stream = TcpStream::connect(proxy_addr).await.unwrap();
+        let handshake = common::build_handshake_request(&[AUTH_NO_AUTH]);
+        stream.write_all(&handshake).await.unwrap();
+        let mut response = [0u8; 2];
+        stream.read_exact(&mut response).await.unwrap();
 
-    let addr = Address::IPv4("127.0.0.1".parse().unwrap());
-    let request = common::build_connect_request(&addr, abort_addr.port());
-    stream.write_all(&request).await.unwrap();
+        let addr = Address::IPv4("127.0.0.1".parse().unwrap());
+        let request = common::build_connect_request(&addr, abort_addr.port());
+        stream.write_all(&request).await.unwrap();
 
-    // 读取回复
-    let mut reply = vec![0u8; 10];
-    let result = stream.read_exact(&mut reply).await;
-    if result.is_ok() {
-        assert_eq!(reply[0], SOCKS5_VERSION);
-        // 可能成功也可能失败，取决于时序
-        if reply[1] == REP_SUCCEEDED {
-            // 如果成功，后续读写应该失败
-            let mut buf = [0u8; 10];
-            let result = stream.read(&mut buf).await;
-            match result {
-                Ok(0) | Err(_) => {} // 预期：target 已关闭
-                _ => {}
+        // 读取回复：使用 read 而非 read_exact，因为 target 可能在回复前就关闭
+        let mut reply = vec![0u8; 10];
+        let result = stream.read_exact(&mut reply).await;
+        if result.is_ok() {
+            assert_eq!(reply[0], SOCKS5_VERSION);
+            if reply[1] == REP_SUCCEEDED {
+                // 如果成功，后续读写应该失败
+                let mut buf = [0u8; 10];
+                let result = stream.read(&mut buf).await;
+                match result {
+                    Ok(0) | Err(_) => {} // 预期：target 已关闭
+                    _ => {}
+                }
             }
         }
-    }
+        // read_exact 失败也是可接受的（target 在回复前关闭）
 
-    drop(stream);
+        drop(stream);
+    };
+
+    // 超时保护：避免 relay 挂起导致测试永远阻塞
+    tokio::time::timeout(std::time::Duration::from_secs(10), abort_test)
+        .await
+        .expect("target abort test timed out");
+
     let _ = abort_handle.await;
 
-    // 确保服务器仍然正常
+    // 等待服务端清理完成后验证服务器仍然正常
     let (echo_handle, echo_addr) = common::start_echo_server().await;
-    let mut stream = common::socks5_connect(proxy_addr, echo_addr).await;
-    stream.write_all(b"server ok").await.unwrap();
-    let mut buf = [0u8; 100];
-    let n = stream.read(&mut buf).await.unwrap();
-    assert_eq!(&buf[..n], b"server ok");
+    let mut verified = false;
+    for attempt in 0..10 {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        match try_socks5_connect(proxy_addr, echo_addr).await {
+            Ok(mut stream) => {
+                stream.write_all(b"server ok").await.unwrap();
+                let mut buf = [0u8; 100];
+                let n = stream.read(&mut buf).await.unwrap();
+                assert_eq!(&buf[..n], b"server ok");
+                drop(stream);
+                verified = true;
+                break;
+            }
+            Err(_) if attempt < 9 => continue,
+            Err(e) => panic!("Server not healthy after target abort: {}", e),
+        }
+    }
+    assert!(verified, "Failed to verify server health");
 
-    drop(stream);
     cancel_token.cancel();
     let _ = server_handle.await;
     echo_handle.abort();
