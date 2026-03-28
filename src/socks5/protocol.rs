@@ -38,25 +38,35 @@ pub enum Address {
 }
 
 impl Address {
-    pub fn to_bytes(&self) -> Vec<u8> {
+    /// 将地址编码写入栈上缓冲区，返回写入的字节数。
+    /// 调用方需确保 `buf` 至少有 17 字节（1 ATYP + 16 IPv6 最大）。
+    pub fn write_bytes(&self, buf: &mut [u8]) -> usize {
         match self {
             Address::IPv4(addr) => {
-                let mut buf = vec![ATYP_IPV4];
-                buf.extend_from_slice(&addr.octets());
-                buf
+                buf[0] = ATYP_IPV4;
+                buf[1..5].copy_from_slice(&addr.octets());
+                5
             }
             Address::IPv6(addr) => {
-                let mut buf = vec![ATYP_IPV6];
-                buf.extend_from_slice(&addr.octets());
-                buf
+                buf[0] = ATYP_IPV6;
+                buf[1..17].copy_from_slice(&addr.octets());
+                17
             }
             Address::Domain(domain) => {
-                let mut buf = vec![ATYP_DOMAIN];
-                buf.push(domain.len() as u8);
-                buf.extend_from_slice(domain.as_bytes());
-                buf
+                let domain_bytes = domain.as_bytes();
+                buf[0] = ATYP_DOMAIN;
+                buf[1] = domain_bytes.len() as u8;
+                buf[2..2 + domain_bytes.len()].copy_from_slice(domain_bytes);
+                2 + domain_bytes.len()
             }
         }
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut buf = vec![0u8; 257]; // 1 ATYP + 1 len + 255 domain max
+        let len = self.write_bytes(&mut buf);
+        buf.truncate(len);
+        buf
     }
 }
 

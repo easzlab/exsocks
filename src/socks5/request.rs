@@ -41,11 +41,14 @@ pub async fn parse_request(stream: &mut TcpStream) -> Result<ConnectRequest, Soc
             let mut len_buf = [0u8; 1];
             stream.read_exact(&mut len_buf).await?;
             let len = len_buf[0] as usize;
-            let mut domain_buf = vec![0u8; len];
-            stream.read_exact(&mut domain_buf).await?;
-            Address::Domain(String::from_utf8(domain_buf).map_err(|e| {
-                SocksError::InvalidAddress(format!("Invalid domain encoding: {}", e))
-            })?)
+            let mut domain_buf = [0u8; 255];
+            stream.read_exact(&mut domain_buf[..len]).await?;
+            let domain = std::str::from_utf8(&domain_buf[..len])
+                .map_err(|e| {
+                    SocksError::InvalidAddress(format!("Invalid domain encoding: {}", e))
+                })?
+                .to_owned();
+            Address::Domain(domain)
         }
         ATYP_IPV6 => {
             let mut buf = [0u8; 16];
@@ -77,7 +80,7 @@ pub async fn parse_request(stream: &mut TcpStream) -> Result<ConnectRequest, Soc
 
 async fn send_error_reply(stream: &mut TcpStream, rep: u8) -> Result<(), SocksError> {
     let dummy_addr = std::net::SocketAddr::from(([0, 0, 0, 0], 0));
-    let reply = build_reply(rep, dummy_addr);
-    stream.write_all(&reply).await?;
+    let (buf, len) = build_reply(rep, dummy_addr);
+    stream.write_all(&buf[..len]).await?;
     Ok(())
 }
