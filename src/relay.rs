@@ -68,8 +68,8 @@ pub async fn relay(
     buffer_size: usize,
     cancel: CancellationToken,
 ) -> Result<(u64, u64), SocksError> {
-    let (mut client_reader, mut client_writer) = tokio::io::split(client);
-    let (mut target_reader, mut target_writer) = tokio::io::split(target);
+    let (mut client_reader, mut client_writer) = client.into_split();
+    let (mut target_reader, mut target_writer) = target.into_split();
 
     let cancel_c2t = cancel.clone();
     let client_to_target = tokio::spawn(async move {
