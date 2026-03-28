@@ -1,6 +1,6 @@
 [package]
 name = "exsocks"
-version = "0.2.6"
+version = "0.2.7"
 edition = "2024"
 
 [dependencies]
@@ -9,6 +9,7 @@ clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
+tracing-rolling-file = { version = "0.1", features = ["non-blocking"] }
 thiserror = "2"
 bytes = "1"
 serde = { version = "1", features = ["derive"] }

@@ -48,6 +48,21 @@ fn default_dns_cache_negative_ttl() -> u64 {
     30
 }
 
+/// 默认日志最大保留文件数：7
+///
+/// 按天滚动时相当于保留最近 7 天的日志
+fn default_log_max_files() -> usize {
+    7
+}
+
+/// 默认单个日志文件最大大小：0 表示不限制
+///
+/// 单位为字节，设置后日志文件达到此大小时也会触发滚动
+/// 与按天滚动同时生效，任一条件满足即滚动
+fn default_log_max_size() -> u64 {
+    0
+}
+
 /// 默认缓冲区池容量：0 表示自动推导为 max_connections * 2
 fn default_relay_pool_capacity() -> usize {
     0
@@ -65,6 +80,13 @@ pub struct AppConfig {
     pub log_dir: PathBuf,
     #[serde(default = "default_log_level")]
     pub log_level: String,
+    /// 日志最大保留文件数，按天滚动时相当于保留天数，默认 7
+    #[serde(default = "default_log_max_files")]
+    pub log_max_files: usize,
+    /// 单个日志文件最大大小（字节），0 表示不限制，默认 0
+    /// 与按天滚动同时生效，任一条件满足即触发滚动
+    #[serde(default = "default_log_max_size")]
+    pub log_max_size: u64,
     /// 转发缓冲区大小（字节），默认 65536 (64 KiB)
     #[serde(default = "default_relay_buffer_size")]
     pub relay_buffer_size: usize,
@@ -90,6 +112,8 @@ impl AppConfig {
             .set_default("connect_timeout", default_connect_timeout() as i64)?
             .set_default("log_dir", default_log_dir().to_str().unwrap())?
             .set_default("log_level", default_log_level())?
+            .set_default("log_max_files", default_log_max_files() as i64)?
+            .set_default("log_max_size", default_log_max_size() as i64)?
             .set_default("relay_buffer_size", default_relay_buffer_size() as i64)?
             .set_default("dns_cache_ttl", default_dns_cache_ttl() as i64)?
             .set_default(
@@ -174,6 +198,8 @@ impl Default for AppConfig {
             connect_timeout: default_connect_timeout(),
             log_dir: default_log_dir(),
             log_level: default_log_level(),
+            log_max_files: default_log_max_files(),
+            log_max_size: default_log_max_size(),
             relay_buffer_size: default_relay_buffer_size(),
             dns_cache_ttl: default_dns_cache_ttl(),
             dns_cache_max_entries: default_dns_cache_max_entries(),
@@ -197,6 +223,8 @@ mod tests {
         assert_eq!(config.connect_timeout, 10);
         assert_eq!(config.log_dir, PathBuf::from("./logs"));
         assert_eq!(config.log_level, "info");
+        assert_eq!(config.log_max_files, 7);
+        assert_eq!(config.log_max_size, 0);
         assert_eq!(config.relay_buffer_size, 65536);
         assert_eq!(config.dns_cache_ttl, 300);
         assert_eq!(config.dns_cache_max_entries, 1024);

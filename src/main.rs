@@ -47,11 +47,24 @@ struct Args {
     config: Option<PathBuf>,
 }
 
-fn init_logging(log_dir: &PathBuf, log_level: &str) -> tracing_appender::non_blocking::WorkerGuard {
+fn init_logging(
+    log_dir: &PathBuf,
+    log_level: &str,
+    max_files: usize,
+    max_size: u64,
+) -> tracing_appender::non_blocking::WorkerGuard {
     std::fs::create_dir_all(log_dir).expect("Failed to create log directory");
 
-    let file_appender = tracing_appender::rolling::daily(log_dir, "exsocks.log");
-    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+    let log_path = log_dir.join("exsocks.log");
+    let mut condition = tracing_rolling_file::RollingConditionBase::new().daily();
+    if max_size > 0 {
+        condition = condition.max_size(max_size);
+    }
+    let file_appender =
+        tracing_rolling_file::RollingFileAppenderBase::new(log_path, condition, max_files)
+            .expect("Failed to create rolling file appender");
+
+    let (non_blocking, guard) = file_appender.get_non_blocking_appender();
 
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(log_level));
@@ -83,7 +96,12 @@ async fn main() -> Result<(), SocksError> {
         None,
     );
 
-    let _guard = init_logging(&config.log_dir, &config.log_level);
+    let _guard = init_logging(
+        &config.log_dir,
+        &config.log_level,
+        config.log_max_files,
+        config.log_max_size,
+    );
 
     info!("Starting exsocks server");
     info!("Configuration: {:?}", config);
