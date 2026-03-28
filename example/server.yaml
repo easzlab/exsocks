@@ -57,3 +57,10 @@ dns_cache_max_entries: 1024
 # 设置为 0 可禁用负缓存（每次都重新尝试解析）
 # 默认: 30
 dns_cache_negative_ttl: 30
+
+# 缓冲区对象池容量
+# relay 双向转发使用的 Vec<u8> 缓冲区对象池最大容量
+# 设置为 0 时自动使用 max_connections * 2
+# 池中缓冲区可被连接复用，减少高频短连接场景下的堆分配开销
+# 默认: 0（自动推导）
+# relay_pool_capacity: 0

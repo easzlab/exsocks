@@ -9,6 +9,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 use tracing::{debug, error, info, info_span};
 
+use crate::buffer_pool::BufferPool;
 use crate::config::AppConfig;
 use crate::dns_cache::DnsCache;
 use crate::error::SocksError;
@@ -35,6 +36,9 @@ pub async fn run_with_listener(
     let limiter = Arc::new(ConnectionLimiter::new(config.max_connections));
     let connect_timeout = Duration::from_secs(config.connect_timeout);
     let relay_buffer_size = config.relay_buffer_size;
+    let pool_capacity = config.effective_pool_capacity();
+    let buffer_pool = Arc::new(BufferPool::new(pool_capacity, relay_buffer_size));
+    info!(capacity = pool_capacity, buffer_size = relay_buffer_size, "Buffer pool initialized");
     let cancel_token = external_token.unwrap_or_else(CancellationToken::new);
     let dns_cache = if config.dns_cache_ttl > 0 {
         let cache = Arc::new(DnsCache::new(
@@ -62,10 +66,11 @@ pub async fn run_with_listener(
                 socket.set_nodelay(true)?;
                 let limiter = limiter.clone();
                 let dns_cache = dns_cache.clone();
+                let pool = buffer_pool.clone();
                 let token = cancel_token.child_token();
 
                 tokio::spawn(async move {
-                    let result = handle_connection(socket, peer_addr, limiter, connect_timeout, relay_buffer_size, dns_cache, token).await;
+                    let result = handle_connection(socket, peer_addr, limiter, connect_timeout, pool, dns_cache, token).await;
                     if let Err(e) = result {
                         error!(error = %e, "Connection error");
                     }
@@ -92,7 +97,7 @@ async fn handle_connection(
     _peer_addr: SocketAddr,
     limiter: Arc<ConnectionLimiter>,
     connect_timeout: Duration,
-    relay_buffer_size: usize,
+    pool: Arc<BufferPool>,
     dns_cache: Option<Arc<DnsCache>>,
     cancel: CancellationToken,
 ) -> Result<(), SocksError> {
@@ -133,7 +138,7 @@ async fn handle_connection(
     socks5::send_reply(&mut socket, REP_SUCCEEDED, bind_addr).await?;
     info!(target = %request.address, port = request.port, "Established");
 
-    let (client_to_target, target_to_client) = relay::relay(socket, target, relay_buffer_size, cancel).await?;
+    let (client_to_target, target_to_client) = relay::relay(socket, target, &pool, cancel).await?;
     info!(
         bytes_up = client_to_target,
         bytes_down = target_to_client,

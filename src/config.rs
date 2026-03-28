@@ -48,6 +48,11 @@ fn default_dns_cache_negative_ttl() -> u64 {
     30
 }
 
+/// 默认缓冲区池容量：0 表示自动推导为 max_connections * 2
+fn default_relay_pool_capacity() -> usize {
+    0
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AppConfig {
     #[serde(default = "default_bind")]
@@ -72,6 +77,9 @@ pub struct AppConfig {
     /// DNS 负缓存 TTL（秒），解析失败时缓存的时间，默认 30
     #[serde(default = "default_dns_cache_negative_ttl")]
     pub dns_cache_negative_ttl: u64,
+    /// 缓冲区对象池容量，0 表示自动使用 max_connections * 2
+    #[serde(default = "default_relay_pool_capacity")]
+    pub relay_pool_capacity: usize,
 }
 
 impl AppConfig {
@@ -85,7 +93,8 @@ impl AppConfig {
             .set_default("relay_buffer_size", default_relay_buffer_size() as i64)?
             .set_default("dns_cache_ttl", default_dns_cache_ttl() as i64)?
             .set_default("dns_cache_max_entries", default_dns_cache_max_entries() as i64)?
-            .set_default("dns_cache_negative_ttl", default_dns_cache_negative_ttl() as i64)?;
+            .set_default("dns_cache_negative_ttl", default_dns_cache_negative_ttl() as i64)?
+            .set_default("relay_pool_capacity", default_relay_pool_capacity() as i64)?;
 
         // 加载系统配置文件
         if let Some(config_dir) = dirs::config_dir() {
@@ -137,6 +146,18 @@ impl AppConfig {
             self.connect_timeout = timeout;
         }
     }
+
+    /// 返回实际生效的缓冲区池容量
+    ///
+    /// 如果 `relay_pool_capacity` 大于 0，直接使用该值；
+    /// 否则自动推导为 `max_connections * 2`。
+    pub fn effective_pool_capacity(&self) -> usize {
+        if self.relay_pool_capacity > 0 {
+            self.relay_pool_capacity
+        } else {
+            self.max_connections * 2
+        }
+    }
 }
 
 impl Default for AppConfig {
@@ -151,6 +172,7 @@ impl Default for AppConfig {
             dns_cache_ttl: default_dns_cache_ttl(),
             dns_cache_max_entries: default_dns_cache_max_entries(),
             dns_cache_negative_ttl: default_dns_cache_negative_ttl(),
+            relay_pool_capacity: default_relay_pool_capacity(),
         }
     }
 }
@@ -173,6 +195,8 @@ mod tests {
         assert_eq!(config.dns_cache_ttl, 300);
         assert_eq!(config.dns_cache_max_entries, 1024);
         assert_eq!(config.dns_cache_negative_ttl, 30);
+        assert_eq!(config.relay_pool_capacity, 0);
+        assert_eq!(config.effective_pool_capacity(), 1024 * 2);
     }
 
     #[test]

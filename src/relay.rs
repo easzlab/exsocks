@@ -20,28 +20,32 @@
 //! - **16-32 KiB**：适合低内存环境或大量短连接场景
 
 use std::io;
+use std::sync::Arc;
 
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_util::sync::CancellationToken;
 
+use crate::buffer_pool::BufferPool;
 use crate::error::SocksError;
 
 /// 默认转发缓冲区大小：64 KiB
 pub const DEFAULT_BUFFER_SIZE: usize = 65536;
 
-/// 单向异步拷贝：reader → writer，使用指定大小的缓冲区。
+/// 单向异步拷贝：reader → writer，使用对象池中的缓冲区。
 ///
-/// 拷贝完成后对 writer 执行 shutdown，通知对端 EOF。
-async fn copy_with_shutdown<R, W>(
+/// 从池中获取缓冲区大小，使用该大小构建 BufReader 进行拷贝，
+/// 拷贝完成后对 writer 执行 shutdown 通知对端 EOF。
+async fn copy_with_pool<R, W>(
     reader: &mut R,
     writer: &mut W,
-    buffer_size: usize,
+    pool: Arc<BufferPool>,
 ) -> io::Result<u64>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
+    let buffer_size = pool.buffer_size();
     let mut buffer = tokio::io::BufReader::with_capacity(buffer_size, reader);
     let bytes_copied = tokio::io::copy_buf(&mut buffer, writer).await?;
     writer.shutdown().await?;
@@ -51,12 +55,12 @@ where
 /// 启动双向数据转发，返回 (client→target 字节数, target→client 字节数)。
 ///
 /// 两个方向并发执行，任一方向 EOF 后通过 shutdown 通知对端，
-/// 等待双方都完成后返回。
+/// 等待双方都完成后返回。缓冲区从对象池中获取，完成后归还。
 ///
 /// # 参数
 /// - `client`: 客户端连接
-/// - `target`: 目标服务器连接  
-/// - `buffer_size`: 转发缓冲区大小（字节），建议 16KB-256KB
+/// - `target`: 目标服务器连接
+/// - `pool`: 缓冲区对象池，用于复用预分配的缓冲区
 /// - `cancel`: 取消令牌，用于优雅关闭时中断转发
 ///
 /// # 取消行为
@@ -65,9 +69,12 @@ where
 pub async fn relay(
     client: TcpStream,
     target: TcpStream,
-    buffer_size: usize,
+    pool: &Arc<BufferPool>,
     cancel: CancellationToken,
 ) -> Result<(u64, u64), SocksError> {
+    let pool_c2t = pool.clone();
+    let pool_t2c = pool.clone();
+
     let (mut client_reader, mut client_writer) = client.into_split();
     let (mut target_reader, mut target_writer) = target.into_split();
 
@@ -76,7 +83,7 @@ pub async fn relay(
         tokio::select! {
             biased;
             _ = cancel_c2t.cancelled() => Ok(0),
-            result = copy_with_shutdown(&mut client_reader, &mut target_writer, buffer_size) => result,
+            result = copy_with_pool(&mut client_reader, &mut target_writer, pool_c2t) => result,
         }
     });
 
@@ -85,7 +92,7 @@ pub async fn relay(
         tokio::select! {
             biased;
             _ = cancel_t2c.cancelled() => Ok(0),
-            result = copy_with_shutdown(&mut target_reader, &mut client_writer, buffer_size) => result,
+            result = copy_with_pool(&mut target_reader, &mut client_writer, pool_t2c) => result,
         }
     });
 
