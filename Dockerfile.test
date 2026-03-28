@@ -22,7 +22,7 @@ COPY Cargo.toml Cargo.lock ./
 # 2. 创建虚拟项目结构，预编译依赖
 RUN mkdir src && \
     echo "fn main() {}" > src/main.rs && \
-    cargo build --release && \
+    cargo build && \
     rm -rf src
 
 # 3. 复制真实源码并构建

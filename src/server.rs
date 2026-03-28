@@ -10,6 +10,7 @@ use tracing::Instrument;
 use tracing::{debug, error, info, info_span};
 
 use crate::config::AppConfig;
+use crate::dns_cache::DnsCache;
 use crate::error::SocksError;
 use crate::limiter::ConnectionLimiter;
 use crate::relay;
@@ -35,6 +36,23 @@ pub async fn run_with_listener(
     let connect_timeout = Duration::from_secs(config.connect_timeout);
     let relay_buffer_size = config.relay_buffer_size;
     let cancel_token = external_token.unwrap_or_else(CancellationToken::new);
+    let dns_cache = if config.dns_cache_ttl > 0 {
+        let cache = Arc::new(DnsCache::new(
+            Duration::from_secs(config.dns_cache_ttl),
+            Duration::from_secs(config.dns_cache_negative_ttl),
+            config.dns_cache_max_entries,
+        ));
+        info!(
+            ttl = config.dns_cache_ttl,
+            negative_ttl = config.dns_cache_negative_ttl,
+            max_entries = config.dns_cache_max_entries,
+            "DNS cache enabled"
+        );
+        Some(cache)
+    } else {
+        info!("DNS cache disabled");
+        None
+    };
     info!("Max connections: {}", config.max_connections);
 
     loop {
@@ -43,10 +61,11 @@ pub async fn run_with_listener(
                 let (socket, peer_addr) = result?;
                 socket.set_nodelay(true)?;
                 let limiter = limiter.clone();
+                let dns_cache = dns_cache.clone();
                 let token = cancel_token.child_token();
 
                 tokio::spawn(async move {
-                    let result = handle_connection(socket, peer_addr, limiter, connect_timeout, relay_buffer_size, token).await;
+                    let result = handle_connection(socket, peer_addr, limiter, connect_timeout, relay_buffer_size, dns_cache, token).await;
                     if let Err(e) = result {
                         error!(error = %e, "Connection error");
                     }
@@ -74,6 +93,7 @@ async fn handle_connection(
     limiter: Arc<ConnectionLimiter>,
     connect_timeout: Duration,
     relay_buffer_size: usize,
+    dns_cache: Option<Arc<DnsCache>>,
     cancel: CancellationToken,
 ) -> Result<(), SocksError> {
     let _permit = match limiter.acquire() {
@@ -89,7 +109,14 @@ async fn handle_connection(
     let request = socks5::parse_request(&mut socket).await?;
     debug!(target = %request.address, port = request.port, "CONNECT");
 
-    let target = match timeout(connect_timeout, request.address.connect(request.port)).await {
+    let target = match timeout(
+        connect_timeout,
+        request
+            .address
+            .connect(request.port, dns_cache.as_deref()),
+    )
+    .await
+    {
         Ok(Ok(stream)) => stream,
         Ok(Err(e)) => {
             error!(error = %e, "Failed to connect to target");

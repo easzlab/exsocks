@@ -31,6 +31,23 @@ fn default_relay_buffer_size() -> usize {
     65536
 }
 
+/// 默认 DNS 缓存 TTL：300 秒（5 分钟）
+fn default_dns_cache_ttl() -> u64 {
+    300
+}
+
+/// 默认 DNS 缓存最大条目数
+fn default_dns_cache_max_entries() -> usize {
+    1024
+}
+
+/// 默认 DNS 负缓存 TTL：30 秒
+///
+/// 解析失败时缓存的时间，避免短时间内对同一不可达域名反复发起 DNS 查询
+fn default_dns_cache_negative_ttl() -> u64 {
+    30
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AppConfig {
     #[serde(default = "default_bind")]
@@ -46,6 +63,15 @@ pub struct AppConfig {
     /// 转发缓冲区大小（字节），默认 65536 (64 KiB)
     #[serde(default = "default_relay_buffer_size")]
     pub relay_buffer_size: usize,
+    /// DNS 缓存 TTL（秒），0 表示禁用缓存，默认 300
+    #[serde(default = "default_dns_cache_ttl")]
+    pub dns_cache_ttl: u64,
+    /// DNS 缓存最大条目数，默认 1024
+    #[serde(default = "default_dns_cache_max_entries")]
+    pub dns_cache_max_entries: usize,
+    /// DNS 负缓存 TTL（秒），解析失败时缓存的时间，默认 30
+    #[serde(default = "default_dns_cache_negative_ttl")]
+    pub dns_cache_negative_ttl: u64,
 }
 
 impl AppConfig {
@@ -56,7 +82,10 @@ impl AppConfig {
             .set_default("connect_timeout", default_connect_timeout() as i64)?
             .set_default("log_dir", default_log_dir().to_str().unwrap())?
             .set_default("log_level", default_log_level())?
-            .set_default("relay_buffer_size", default_relay_buffer_size() as i64)?;
+            .set_default("relay_buffer_size", default_relay_buffer_size() as i64)?
+            .set_default("dns_cache_ttl", default_dns_cache_ttl() as i64)?
+            .set_default("dns_cache_max_entries", default_dns_cache_max_entries() as i64)?
+            .set_default("dns_cache_negative_ttl", default_dns_cache_negative_ttl() as i64)?;
 
         // 加载系统配置文件
         if let Some(config_dir) = dirs::config_dir() {
@@ -119,6 +148,9 @@ impl Default for AppConfig {
             log_dir: default_log_dir(),
             log_level: default_log_level(),
             relay_buffer_size: default_relay_buffer_size(),
+            dns_cache_ttl: default_dns_cache_ttl(),
+            dns_cache_max_entries: default_dns_cache_max_entries(),
+            dns_cache_negative_ttl: default_dns_cache_negative_ttl(),
         }
     }
 }
@@ -138,6 +170,9 @@ mod tests {
         assert_eq!(config.log_dir, PathBuf::from("./logs"));
         assert_eq!(config.log_level, "info");
         assert_eq!(config.relay_buffer_size, 65536);
+        assert_eq!(config.dns_cache_ttl, 300);
+        assert_eq!(config.dns_cache_max_entries, 1024);
+        assert_eq!(config.dns_cache_negative_ttl, 30);
     }
 
     #[test]

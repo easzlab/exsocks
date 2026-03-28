@@ -1,6 +1,6 @@
 [package]
 name = "exsocks"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2024"
 
 [dependencies]
@@ -15,6 +15,7 @@ serde = { version = "1", features = ["derive"] }
 config = "0.15"
 dirs = "6"
 tokio-util = "0.7"
+dashmap = "6"
 
 [dev-dependencies]
 tokio-test = "0.4"

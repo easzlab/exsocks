@@ -5,6 +5,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use tokio::net::TcpStream;
 
+use crate::dns_cache::DnsCache;
 use crate::error::SocksError;
 
 pub const SOCKS5_VERSION: u8 = 0x05;
@@ -82,7 +83,14 @@ impl fmt::Display for Address {
 
 impl Address {
     /// 直接建立 TCP 连接，避免 IPv4/IPv6 地址经过 format → parse 的不必要堆分配。
-    pub async fn connect(&self, port: u16) -> Result<TcpStream, SocksError> {
+    ///
+    /// 域名场景下，若提供了 `dns_cache`，则优先使用缓存的 DNS 解析结果；
+    /// 否则回退到 `TcpStream::connect((domain, port))` 的默认行为。
+    pub async fn connect(
+        &self,
+        port: u16,
+        dns_cache: Option<&DnsCache>,
+    ) -> Result<TcpStream, SocksError> {
         match self {
             Address::IPv4(addr) => {
                 let sock_addr = SocketAddr::new(IpAddr::V4(*addr), port);
@@ -92,7 +100,13 @@ impl Address {
                 let sock_addr = SocketAddr::new(IpAddr::V6(*addr), port);
                 Ok(TcpStream::connect(sock_addr).await?)
             }
-            Address::Domain(domain) => Ok(TcpStream::connect((domain.as_str(), port)).await?),
+            Address::Domain(domain) => {
+                if let Some(cache) = dns_cache {
+                    cache.resolve(domain, port).await
+                } else {
+                    Ok(TcpStream::connect((domain.as_str(), port)).await?)
+                }
+            }
         }
     }
 }
