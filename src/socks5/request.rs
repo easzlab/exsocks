@@ -44,9 +44,7 @@ pub async fn parse_request(stream: &mut TcpStream) -> Result<ConnectRequest, Soc
             let mut domain_buf = [0u8; 255];
             stream.read_exact(&mut domain_buf[..len]).await?;
             let domain = std::str::from_utf8(&domain_buf[..len])
-                .map_err(|e| {
-                    SocksError::InvalidAddress(format!("Invalid domain encoding: {}", e))
-                })?
+                .map_err(|e| SocksError::InvalidAddress(format!("Invalid domain encoding: {}", e)))?
                 .to_owned();
             Address::Domain(domain)
         }

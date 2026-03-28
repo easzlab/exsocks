@@ -2,7 +2,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
-use tokio::net::{lookup_host, TcpStream};
+use tokio::net::{TcpStream, lookup_host};
 use tracing::debug;
 
 use crate::error::SocksError;
@@ -209,11 +209,7 @@ mod tests {
 
     #[test]
     fn test_evict_expired_positive() {
-        let cache = DnsCache::new(
-            Duration::from_millis(1),
-            Duration::from_millis(1),
-            1024,
-        );
+        let cache = DnsCache::new(Duration::from_millis(1), Duration::from_millis(1), 1024);
 
         // 手动插入一个过期的正缓存条目
         cache.cache.insert(
@@ -231,11 +227,7 @@ mod tests {
 
     #[test]
     fn test_evict_expired_negative() {
-        let cache = DnsCache::new(
-            Duration::from_secs(300),
-            Duration::from_millis(1),
-            1024,
-        );
+        let cache = DnsCache::new(Duration::from_secs(300), Duration::from_millis(1), 1024);
 
         // 插入一个过期的负缓存条目
         cache.cache.insert(

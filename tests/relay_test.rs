@@ -3,7 +3,7 @@ mod common;
 use std::sync::Arc;
 
 use exsocks::buffer_pool::BufferPool;
-use exsocks::relay::{relay, DEFAULT_BUFFER_SIZE};
+use exsocks::relay::{DEFAULT_BUFFER_SIZE, relay};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
@@ -30,7 +30,15 @@ async fn test_relay_bidirectional() {
     let (mut target, _) = target_listener.accept().await.unwrap();
 
     let pool = test_pool();
-    let relay_handle = tokio::spawn(async move { relay(proxy_to_client, proxy_to_target, &pool, CancellationToken::new()).await });
+    let relay_handle = tokio::spawn(async move {
+        relay(
+            proxy_to_client,
+            proxy_to_target,
+            &pool,
+            CancellationToken::new(),
+        )
+        .await
+    });
 
     // client 发送数据
     let client_data = b"hello from client";
@@ -72,7 +80,15 @@ async fn test_relay_large_data() {
     let (mut target, _) = target_listener.accept().await.unwrap();
 
     let pool = test_pool();
-    let relay_handle = tokio::spawn(async move { relay(proxy_to_client, proxy_to_target, &pool, CancellationToken::new()).await });
+    let relay_handle = tokio::spawn(async move {
+        relay(
+            proxy_to_client,
+            proxy_to_target,
+            &pool,
+            CancellationToken::new(),
+        )
+        .await
+    });
 
     // 发送 1MB 数据
     let data: Vec<u8> = (0..1_048_576).map(|i| (i % 256) as u8).collect();
@@ -111,7 +127,15 @@ async fn test_relay_client_close() {
     let (mut target, _) = target_listener.accept().await.unwrap();
 
     let pool = test_pool();
-    let relay_handle = tokio::spawn(async move { relay(proxy_to_client, proxy_to_target, &pool, CancellationToken::new()).await });
+    let relay_handle = tokio::spawn(async move {
+        relay(
+            proxy_to_client,
+            proxy_to_target,
+            &pool,
+            CancellationToken::new(),
+        )
+        .await
+    });
 
     // 客户端立即关闭
     drop(client);
@@ -139,7 +163,15 @@ async fn test_relay_empty_transfer() {
     let (target, _) = target_listener.accept().await.unwrap();
 
     let pool = test_pool();
-    let relay_handle = tokio::spawn(async move { relay(proxy_to_client, proxy_to_target, &pool, CancellationToken::new()).await });
+    let relay_handle = tokio::spawn(async move {
+        relay(
+            proxy_to_client,
+            proxy_to_target,
+            &pool,
+            CancellationToken::new(),
+        )
+        .await
+    });
 
     // 双方都不发送数据直接关闭
     drop(client);
@@ -166,7 +198,15 @@ async fn test_relay_target_close() {
     let (target, _) = target_listener.accept().await.unwrap();
 
     let pool = test_pool();
-    let relay_handle = tokio::spawn(async move { relay(proxy_to_client, proxy_to_target, &pool, CancellationToken::new()).await });
+    let relay_handle = tokio::spawn(async move {
+        relay(
+            proxy_to_client,
+            proxy_to_target,
+            &pool,
+            CancellationToken::new(),
+        )
+        .await
+    });
 
     // target 立即关闭
     drop(target);
@@ -194,7 +234,15 @@ async fn test_relay_byte_count() {
     let (mut target, _) = target_listener.accept().await.unwrap();
 
     let pool = test_pool();
-    let relay_handle = tokio::spawn(async move { relay(proxy_to_client, proxy_to_target, &pool, CancellationToken::new()).await });
+    let relay_handle = tokio::spawn(async move {
+        relay(
+            proxy_to_client,
+            proxy_to_target,
+            &pool,
+            CancellationToken::new(),
+        )
+        .await
+    });
 
     // client 发送 100 字节
     let client_data = vec![b'A'; 100];
@@ -229,8 +277,8 @@ async fn test_relay_byte_count() {
 /// 并发压力测试：100+ 并发连接同时进行双向数据传输
 #[tokio::test]
 async fn test_relay_concurrent_connections() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     const NUM_CONNECTIONS: usize = 128;
     const DATA_SIZE: usize = 4096;
@@ -255,7 +303,13 @@ async fn test_relay_concurrent_connections() {
 
             let pool = test_pool();
             let relay_handle = tokio::spawn(async move {
-                relay(proxy_to_client, proxy_to_target, &pool, CancellationToken::new()).await
+                relay(
+                    proxy_to_client,
+                    proxy_to_target,
+                    &pool,
+                    CancellationToken::new(),
+                )
+                .await
             });
 
             // 生成测试数据（每个连接不同）
@@ -330,9 +384,10 @@ async fn test_relay_cancellation_on_unresponsive_peer() {
     let cancel_clone = cancel_token.clone();
 
     let pool = test_pool();
-    let relay_handle = tokio::spawn(async move {
-        relay(proxy_to_client, proxy_to_target, &pool, cancel_clone).await
-    });
+    let relay_handle =
+        tokio::spawn(
+            async move { relay(proxy_to_client, proxy_to_target, &pool, cancel_clone).await },
+        );
 
     // 模拟对端不响应，等待 50ms 后触发取消
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -340,7 +395,10 @@ async fn test_relay_cancellation_on_unresponsive_peer() {
 
     // relay 应该在取消后快速返回
     let result = tokio::time::timeout(Duration::from_millis(100), relay_handle).await;
-    assert!(result.is_ok(), "Relay should complete quickly after cancellation");
+    assert!(
+        result.is_ok(),
+        "Relay should complete quickly after cancellation"
+    );
 
     let relay_result = result.unwrap().unwrap();
     // 取消时可能返回 Ok (0, 0) 或者 Err（取决于取消时机）
@@ -376,9 +434,10 @@ async fn test_relay_cancellation_during_transfer() {
     let cancel_clone = cancel_token.clone();
 
     let pool = test_pool();
-    let relay_handle = tokio::spawn(async move {
-        relay(proxy_to_client, proxy_to_target, &pool, cancel_clone).await
-    });
+    let relay_handle =
+        tokio::spawn(
+            async move { relay(proxy_to_client, proxy_to_target, &pool, cancel_clone).await },
+        );
 
     // 发送一些数据
     let data = b"some data before cancel";

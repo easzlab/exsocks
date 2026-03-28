@@ -92,8 +92,14 @@ impl AppConfig {
             .set_default("log_level", default_log_level())?
             .set_default("relay_buffer_size", default_relay_buffer_size() as i64)?
             .set_default("dns_cache_ttl", default_dns_cache_ttl() as i64)?
-            .set_default("dns_cache_max_entries", default_dns_cache_max_entries() as i64)?
-            .set_default("dns_cache_negative_ttl", default_dns_cache_negative_ttl() as i64)?
+            .set_default(
+                "dns_cache_max_entries",
+                default_dns_cache_max_entries() as i64,
+            )?
+            .set_default(
+                "dns_cache_negative_ttl",
+                default_dns_cache_negative_ttl() as i64,
+            )?
             .set_default("relay_pool_capacity", default_relay_pool_capacity() as i64)?;
 
         // 加载系统配置文件

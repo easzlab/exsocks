@@ -8,10 +8,23 @@ use exsocks::config::AppConfig;
 use exsocks::error::SocksError;
 use exsocks::server;
 
+fn build_version_string() -> &'static str {
+    Box::leak(
+        format!(
+            "{}\nGit Commit: {}\nBuild Time: {}\nRust: {}",
+            env!("CARGO_PKG_VERSION"),
+            env!("GIT_COMMIT"),
+            env!("BUILD_TIME"),
+            env!("RUSTC_VERSION_INFO"),
+        )
+        .into_boxed_str(),
+    )
+}
+
 #[derive(Parser, Debug)]
 #[command(name = "exsocks")]
 #[command(about = "High-performance SOCKS5 proxy server")]
-#[command(version)]
+#[command(version = build_version_string())]
 struct Args {
     /// Bind address
     #[arg(short, long)]

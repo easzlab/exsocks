@@ -41,7 +41,9 @@ impl BufferPool {
     /// 如果池中有空闲缓冲区，直接返回；否则分配一个新的 `Vec<u8>`
     /// 并预分配 `buffer_size` 容量。
     pub fn get(&self) -> Vec<u8> {
-        self.queue.pop().unwrap_or_else(|| Vec::with_capacity(self.buffer_size))
+        self.queue
+            .pop()
+            .unwrap_or_else(|| Vec::with_capacity(self.buffer_size))
     }
 
     /// 归还缓冲区到池中。

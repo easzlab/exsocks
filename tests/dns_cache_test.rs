@@ -12,7 +12,9 @@ async fn test_resolve_caches_result() {
     let port = listener.local_addr().unwrap().port();
 
     // 同时绑定 IPv6（如果可用）
-    let listener6 = tokio::net::TcpListener::bind(format!("[::]:{}", port)).await.ok();
+    let listener6 = tokio::net::TcpListener::bind(format!("[::]:{}", port))
+        .await
+        .ok();
 
     // 在后台接受连接
     let accept_handle = tokio::spawn(async move {
@@ -117,12 +119,22 @@ async fn test_negative_cache_hit() {
 
     // 解析一个不存在的域名，应该失败
     let result1 = cache.resolve("nonexistent.invalid.test.domain", 80).await;
-    assert!(result1.is_err(), "First resolve of invalid domain should fail");
-    assert_eq!(cache.len(), 1, "Failed result should be cached (negative cache)");
+    assert!(
+        result1.is_err(),
+        "First resolve of invalid domain should fail"
+    );
+    assert_eq!(
+        cache.len(),
+        1,
+        "Failed result should be cached (negative cache)"
+    );
 
     // 第二次解析同一域名，应命中负缓存，直接返回错误
     let result2 = cache.resolve("nonexistent.invalid.test.domain", 80).await;
-    assert!(result2.is_err(), "Second resolve should also fail (negative cache hit)");
+    assert!(
+        result2.is_err(),
+        "Second resolve should also fail (negative cache hit)"
+    );
     let err_msg = result2.unwrap_err().to_string();
     assert!(
         err_msg.contains("cached"),
@@ -164,7 +176,9 @@ async fn test_positive_and_negative_cache_independent_ttl() {
     // 再缓存一个成功的域名
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let _listener6 = tokio::net::TcpListener::bind(format!("[::]:{}", port)).await.ok();
+    let _listener6 = tokio::net::TcpListener::bind(format!("[::]:{}", port))
+        .await
+        .ok();
     let accept_handle = tokio::spawn(async move {
         loop {
             let _ = listener.accept().await;

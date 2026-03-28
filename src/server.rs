@@ -38,7 +38,11 @@ pub async fn run_with_listener(
     let relay_buffer_size = config.relay_buffer_size;
     let pool_capacity = config.effective_pool_capacity();
     let buffer_pool = Arc::new(BufferPool::new(pool_capacity, relay_buffer_size));
-    info!(capacity = pool_capacity, buffer_size = relay_buffer_size, "Buffer pool initialized");
+    info!(
+        capacity = pool_capacity,
+        buffer_size = relay_buffer_size,
+        "Buffer pool initialized"
+    );
     let cancel_token = external_token.unwrap_or_else(CancellationToken::new);
     let dns_cache = if config.dns_cache_ttl > 0 {
         let cache = Arc::new(DnsCache::new(
@@ -116,9 +120,7 @@ async fn handle_connection(
 
     let target = match timeout(
         connect_timeout,
-        request
-            .address
-            .connect(request.port, dns_cache.as_deref()),
+        request.address.connect(request.port, dns_cache.as_deref()),
     )
     .await
     {
