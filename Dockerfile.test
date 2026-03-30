@@ -44,6 +44,7 @@ RUN mkdir src && \
 # 3. 复制真实源码并构建
 COPY src ./src
 COPY tests ./tests
+COPY build.rs ./build.rs
 COPY Makefile ./Makefile
 
 # 使用 touch 确保 cargo 重新编译（因为 main.rs 时间戳更新了）

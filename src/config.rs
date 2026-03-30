@@ -162,9 +162,16 @@ impl AppConfig {
         }
 
         // 环境变量覆盖
+        // - prefix: EXSOCKS 前缀，只读取 EXSOCKS_* 环境变量
+        // - prefix_separator("_"): 前缀与字段名之间用单下划线
+        // - separator("__"): 嵌套配置的层级分隔符用双下划线
+        // 例如：EXSOCKS_AUTH_ENABLED -> auth_enabled
+        //       EXSOCKS_DNS_CACHE_TTL -> dns_cache_ttl
+        //       EXSOCKS_NESTED__KEY -> nested.key (如果有嵌套配置)
         builder = builder.add_source(
             Environment::with_prefix("EXSOCKS")
-                .separator("_")
+                .prefix_separator("_")
+                .separator("__")
                 .try_parsing(true),
         );
 
