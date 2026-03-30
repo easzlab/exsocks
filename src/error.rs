@@ -34,6 +34,15 @@ pub enum SocksError {
 
     #[error("Invalid address format: {0}")]
     InvalidAddress(String),
+
+    #[error("Authentication failed for user: {0}")]
+    AuthenticationFailed(String),
+
+    #[error("Invalid authentication sub-negotiation version: 0x{0:02x}")]
+    InvalidAuthVersion(u8),
+
+    #[error("User config error: {0}")]
+    UserConfig(String),
 }
 
 impl From<config::ConfigError> for SocksError {

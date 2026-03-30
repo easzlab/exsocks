@@ -1,0 +1,10 @@
+# exsocks 用户认证配置
+# 
+# 本文件支持热加载：修改保存后自动生效，无需重启服务
+# 注意：用户名不可重复，重复时后者覆盖前者
+
+users:
+  - username: "admin"
+    password: "admin123"
+  - username: "user1"
+    password: "pass1"

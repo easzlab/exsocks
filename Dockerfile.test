@@ -16,6 +16,22 @@ RUN set -eux; \
     make \
     && rm -rf /var/lib/apt/lists/*
 
+# ========== 配置镜像源 ==========
+ENV CARGO_HOME=/root/.cargo
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+RUN mkdir -p $CARGO_HOME && \
+    echo '[source.crates-io]' > $CARGO_HOME/config.toml && \
+    echo "replace-with = 'rsproxy-sparse'" >> $CARGO_HOME/config.toml && \
+    echo '[source.rsproxy]' >> $CARGO_HOME/config.toml && \
+    echo 'registry = "https://rsproxy.cn/crates.io-index"' >> $CARGO_HOME/config.toml && \
+    echo '[source.rsproxy-sparse]' >> $CARGO_HOME/config.toml && \
+    echo 'registry = "sparse+https://rsproxy.cn/index/"' >> $CARGO_HOME/config.toml && \
+    echo '[registries.rsproxy]' >> $CARGO_HOME/config.toml && \
+    echo 'index = "https://rsproxy.cn/crates.io-index"' >> $CARGO_HOME/config.toml && \
+    echo '[net]' >> $CARGO_HOME/config.toml && \
+    echo 'git-fetch-with-cli = true' >> $CARGO_HOME/config.toml
+
 # 1. 先复制依赖文件，利用 Docker 缓存层
 COPY Cargo.toml Cargo.lock ./
 

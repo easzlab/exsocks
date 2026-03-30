@@ -6,6 +6,8 @@ use std::net::{Ipv6Addr, SocketAddr};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
+use common::{build_auth_request, build_handshake_request, create_temp_user_config};
+
 /// 启动 exsocks 代理服务器，返回监听地址
 async fn start_proxy_server() -> (tokio::task::JoinHandle<()>, SocketAddr) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -544,6 +546,193 @@ async fn test_e2e_target_abort() {
         }
     }
     assert!(verified, "Failed to verify server health");
+
+    cancel_token.cancel();
+    let _ = server_handle.await;
+    echo_handle.abort();
+}
+
+// ========== 认证模式 E2E 测试 ==========
+
+#[tokio::test]
+async fn test_e2e_auth_mode_correct_credentials() {
+    let user_yaml = r#"
+users:
+  - username: "admin"
+    password: "admin123"
+  - username: "user1"
+    password: "pass1"
+"#;
+    let (user_config_path, _temp_file) = create_temp_user_config(user_yaml);
+    let (echo_handle, echo_addr) = common::start_echo_server().await;
+    let (server_handle, proxy_addr, cancel_token) =
+        common::start_auth_test_server(user_config_path).await;
+
+    // 使用正确凭证通过代理连接并传输数据
+    let mut stream =
+        common::socks5_connect_with_auth(proxy_addr, echo_addr, "admin", "admin123").await;
+    stream.write_all(b"auth test data").await.unwrap();
+    let mut buf = [0u8; 100];
+    let n = stream.read(&mut buf).await.unwrap();
+    assert_eq!(&buf[..n], b"auth test data");
+
+    drop(stream);
+    cancel_token.cancel();
+    let _ = server_handle.await;
+    echo_handle.abort();
+}
+
+#[tokio::test]
+async fn test_e2e_auth_mode_multiple_users() {
+    let user_yaml = r#"
+users:
+  - username: "admin"
+    password: "admin123"
+  - username: "user1"
+    password: "pass1"
+"#;
+    let (user_config_path, _temp_file) = create_temp_user_config(user_yaml);
+    let (echo_handle, echo_addr) = common::start_echo_server().await;
+    let (server_handle, proxy_addr, cancel_token) =
+        common::start_auth_test_server(user_config_path).await;
+
+    // 两个不同用户都能成功认证并传输数据
+    for (username, password, msg) in [
+        ("admin", "admin123", "hello from admin"),
+        ("user1", "pass1", "hello from user1"),
+    ] {
+        let mut stream =
+            common::socks5_connect_with_auth(proxy_addr, echo_addr, username, password).await;
+        stream.write_all(msg.as_bytes()).await.unwrap();
+        let mut buf = [0u8; 100];
+        let n = stream.read(&mut buf).await.unwrap();
+        assert_eq!(&buf[..n], msg.as_bytes());
+        drop(stream);
+    }
+
+    cancel_token.cancel();
+    let _ = server_handle.await;
+    echo_handle.abort();
+}
+
+#[tokio::test]
+async fn test_e2e_auth_mode_wrong_password_rejected() {
+    let user_yaml = r#"
+users:
+  - username: "admin"
+    password: "admin123"
+"#;
+    let (user_config_path, _temp_file) = create_temp_user_config(user_yaml);
+    let (echo_handle, echo_addr) = common::start_echo_server().await;
+    let (server_handle, proxy_addr, cancel_token) =
+        common::start_auth_test_server(user_config_path).await;
+
+    let mut stream = TcpStream::connect(proxy_addr).await.unwrap();
+
+    // 握手
+    let handshake = build_handshake_request(&[AUTH_USERNAME_PASSWORD]);
+    stream.write_all(&handshake).await.unwrap();
+    let mut response = [0u8; 2];
+    stream.read_exact(&mut response).await.unwrap();
+    assert_eq!(response, [SOCKS5_VERSION, AUTH_USERNAME_PASSWORD]);
+
+    // 发送错误密码
+    let auth_req = build_auth_request("admin", "wrongpass");
+    stream.write_all(&auth_req).await.unwrap();
+    let mut auth_response = [0u8; 2];
+    stream.read_exact(&mut auth_response).await.unwrap();
+    assert_eq!(auth_response, [AUTH_VERSION, AUTH_FAILURE]);
+
+    // 连接应该被关闭
+    let mut buf = [0u8; 10];
+    let result = stream.read(&mut buf).await;
+    match result {
+        Ok(0) | Err(_) => {} // 预期：连接关闭
+        _ => {}
+    }
+
+    // 验证服务器仍然正常（正确凭证可以连接）
+    let mut stream =
+        common::socks5_connect_with_auth(proxy_addr, echo_addr, "admin", "admin123").await;
+    stream.write_all(b"still works").await.unwrap();
+    let mut buf = [0u8; 100];
+    let n = stream.read(&mut buf).await.unwrap();
+    assert_eq!(&buf[..n], b"still works");
+
+    drop(stream);
+    cancel_token.cancel();
+    let _ = server_handle.await;
+    echo_handle.abort();
+}
+
+#[tokio::test]
+async fn test_e2e_auth_mode_no_auth_client_rejected() {
+    let user_yaml = r#"
+users:
+  - username: "admin"
+    password: "admin123"
+"#;
+    let (user_config_path, _temp_file) = create_temp_user_config(user_yaml);
+    let (_echo_handle, _echo_addr) = common::start_echo_server().await;
+    let (server_handle, proxy_addr, cancel_token) =
+        common::start_auth_test_server(user_config_path).await;
+
+    // 客户端仅支持无认证方式，应被拒绝
+    let mut stream = TcpStream::connect(proxy_addr).await.unwrap();
+    let handshake = build_handshake_request(&[AUTH_NO_AUTH]);
+    stream.write_all(&handshake).await.unwrap();
+    let mut response = [0u8; 2];
+    stream.read_exact(&mut response).await.unwrap();
+    assert_eq!(response, [SOCKS5_VERSION, AUTH_NO_ACCEPTABLE]);
+
+    drop(stream);
+    cancel_token.cancel();
+    let _ = server_handle.await;
+    _echo_handle.abort();
+}
+
+#[tokio::test]
+async fn test_e2e_auth_mode_large_transfer() {
+    let user_yaml = r#"
+users:
+  - username: "admin"
+    password: "admin123"
+"#;
+    let (user_config_path, _temp_file) = create_temp_user_config(user_yaml);
+    let (echo_handle, echo_addr) = common::start_echo_server().await;
+    let (server_handle, proxy_addr, cancel_token) =
+        common::start_auth_test_server(user_config_path).await;
+
+    let transfer_test = async {
+        let stream =
+            common::socks5_connect_with_auth(proxy_addr, echo_addr, "admin", "admin123").await;
+
+        // 发送 512KB 数据验证认证后数据转发正常
+        let data: Vec<u8> = (0..524_288).map(|i| (i % 256) as u8).collect();
+        let data_clone = data.clone();
+
+        let (mut read_half, mut write_half) = stream.into_split();
+
+        let write_handle = tokio::spawn(async move {
+            write_half.write_all(&data_clone).await.unwrap();
+            write_half.shutdown().await.unwrap();
+        });
+
+        let read_handle = tokio::spawn(async move {
+            let mut received = Vec::new();
+            read_half.read_to_end(&mut received).await.unwrap();
+            received
+        });
+
+        write_handle.await.unwrap();
+        let received = read_handle.await.unwrap();
+        assert_eq!(received.len(), data.len());
+        assert_eq!(received, data);
+    };
+
+    tokio::time::timeout(std::time::Duration::from_secs(30), transfer_test)
+        .await
+        .expect("auth mode large transfer test timed out");
 
     cancel_token.cancel();
     let _ = server_handle.await;

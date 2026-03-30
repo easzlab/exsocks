@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 
+use std::io::Write;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::sync::CancellationToken;
@@ -165,6 +167,91 @@ pub async fn socks5_connect_domain(proxy: SocketAddr, domain: &str, port: u16) -
     stream.write_all(&request).await.unwrap();
 
     // 读取回复（IPv4 回复 10 字节）
+    let mut reply = [0u8; 10];
+    stream.read_exact(&mut reply).await.unwrap();
+    assert_eq!(reply[0], SOCKS5_VERSION);
+    assert_eq!(reply[1], REP_SUCCEEDED);
+
+    stream
+}
+
+/// 构造 RFC1929 用户名/密码认证子协商请求
+pub fn build_auth_request(username: &str, password: &str) -> Vec<u8> {
+    let mut buf = vec![AUTH_VERSION, username.len() as u8];
+    buf.extend_from_slice(username.as_bytes());
+    buf.push(password.len() as u8);
+    buf.extend_from_slice(password.as_bytes());
+    buf
+}
+
+/// 创建临时用户配置文件，返回文件路径和 TempFile（必须保持存活）
+pub fn create_temp_user_config(yaml: &str) -> (PathBuf, tempfile::NamedTempFile) {
+    let mut temp_file = tempfile::Builder::new()
+        .suffix(".yaml")
+        .tempfile()
+        .unwrap();
+    write!(temp_file, "{}", yaml).unwrap();
+    let path = temp_file.path().to_path_buf();
+    (path, temp_file)
+}
+
+/// 启动启用认证的 exsocks 测试服务器
+pub async fn start_auth_test_server(
+    user_config_path: PathBuf,
+) -> (
+    tokio::task::JoinHandle<Result<(), exsocks::error::SocksError>>,
+    SocketAddr,
+    CancellationToken,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let token = CancellationToken::new();
+    let token_clone = token.clone();
+
+    let mut config = AppConfig::default();
+    config.auth_enabled = true;
+    config.auth_user_file = user_config_path;
+
+    let handle = tokio::spawn(async move {
+        exsocks::server::run_with_listener(config, listener, Some(token_clone)).await
+    });
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    (handle, addr, token)
+}
+
+/// 执行带认证的 SOCKS5 握手 + CONNECT
+pub async fn socks5_connect_with_auth(
+    proxy: SocketAddr,
+    target: SocketAddr,
+    username: &str,
+    password: &str,
+) -> TcpStream {
+    let mut stream = TcpStream::connect(proxy).await.unwrap();
+
+    // 握手：声明支持用户名密码认证
+    let handshake = build_handshake_request(&[AUTH_USERNAME_PASSWORD]);
+    stream.write_all(&handshake).await.unwrap();
+    let mut response = [0u8; 2];
+    stream.read_exact(&mut response).await.unwrap();
+    assert_eq!(response, [SOCKS5_VERSION, AUTH_USERNAME_PASSWORD]);
+
+    // 子协商：发送用户名密码
+    let auth_req = build_auth_request(username, password);
+    stream.write_all(&auth_req).await.unwrap();
+    let mut auth_response = [0u8; 2];
+    stream.read_exact(&mut auth_response).await.unwrap();
+    assert_eq!(auth_response, [AUTH_VERSION, AUTH_SUCCESS]);
+
+    // CONNECT 请求
+    let addr = match target {
+        SocketAddr::V4(v4) => Address::IPv4(*v4.ip()),
+        SocketAddr::V6(v6) => Address::IPv6(*v6.ip()),
+    };
+    let request = build_connect_request(&addr, target.port());
+    stream.write_all(&request).await.unwrap();
+
+    // 读取回复
     let mut reply = [0u8; 10];
     stream.read_exact(&mut reply).await.unwrap();
     assert_eq!(reply[0], SOCKS5_VERSION);

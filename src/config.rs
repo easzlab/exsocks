@@ -68,6 +68,11 @@ fn default_relay_pool_capacity() -> usize {
     0
 }
 
+/// 默认用户认证配置文件路径
+fn default_auth_user_file() -> PathBuf {
+    PathBuf::from("user.yaml")
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AppConfig {
     #[serde(default = "default_bind")]
@@ -102,6 +107,16 @@ pub struct AppConfig {
     /// 缓冲区对象池容量，0 表示自动使用 max_connections * 2
     #[serde(default = "default_relay_pool_capacity")]
     pub relay_pool_capacity: usize,
+    /// 是否启用用户名/密码认证（RFC1929），默认 false
+    /// 启用后客户端必须提供有效的用户名和密码
+    /// 未启用时同时接受无认证和用户名密码认证，但不校验凭证
+    #[serde(default)]
+    pub auth_enabled: bool,
+    /// 用户认证配置文件路径，默认 "user.yaml"
+    /// 仅在 auth_enabled 为 true 时生效
+    /// 支持热加载，修改后自动生效
+    #[serde(default = "default_auth_user_file")]
+    pub auth_user_file: PathBuf,
 }
 
 impl AppConfig {
@@ -124,7 +139,12 @@ impl AppConfig {
                 "dns_cache_negative_ttl",
                 default_dns_cache_negative_ttl() as i64,
             )?
-            .set_default("relay_pool_capacity", default_relay_pool_capacity() as i64)?;
+            .set_default("relay_pool_capacity", default_relay_pool_capacity() as i64)?
+            .set_default("auth_enabled", false)?
+            .set_default(
+                "auth_user_file",
+                default_auth_user_file().to_str().unwrap(),
+            )?;
 
         // 加载系统配置文件
         if let Some(config_dir) = dirs::config_dir() {
@@ -205,6 +225,8 @@ impl Default for AppConfig {
             dns_cache_max_entries: default_dns_cache_max_entries(),
             dns_cache_negative_ttl: default_dns_cache_negative_ttl(),
             relay_pool_capacity: default_relay_pool_capacity(),
+            auth_enabled: false,
+            auth_user_file: default_auth_user_file(),
         }
     }
 }

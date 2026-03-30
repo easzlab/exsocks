@@ -11,7 +11,15 @@ use crate::error::SocksError;
 pub const SOCKS5_VERSION: u8 = 0x05;
 
 pub const AUTH_NO_AUTH: u8 = 0x00;
+pub const AUTH_USERNAME_PASSWORD: u8 = 0x02;
 pub const AUTH_NO_ACCEPTABLE: u8 = 0xFF;
+
+/// RFC1929 用户名/密码认证子协商版本号
+pub const AUTH_VERSION: u8 = 0x01;
+/// RFC1929 认证成功状态码
+pub const AUTH_SUCCESS: u8 = 0x00;
+/// RFC1929 认证失败状态码
+pub const AUTH_FAILURE: u8 = 0x01;
 
 pub const CMD_CONNECT: u8 = 0x01;
 pub const CMD_BIND: u8 = 0x02;
