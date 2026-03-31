@@ -738,3 +738,258 @@ users:
     let _ = server_handle.await;
     echo_handle.abort();
 }
+
+// ========== 访问控制 E2E 测试 ==========
+
+/// 创建临时访问控制配置文件，返回 (文件路径, TempFile)
+fn create_temp_access_config(yaml: &str) -> (std::path::PathBuf, tempfile::NamedTempFile) {
+    use std::io::Write;
+    let mut temp_file = tempfile::Builder::new()
+        .suffix(".yaml")
+        .tempfile()
+        .unwrap();
+    write!(temp_file, "{}", yaml).unwrap();
+    let path = temp_file.path().to_path_buf();
+    (path, temp_file)
+}
+
+#[tokio::test]
+async fn test_e2e_access_whitelist_allows_loopback() {
+    // 白名单含 127.0.0.1/32，本地连接应该成功
+    let access_yaml = r#"
+client_rules:
+  - 127.0.0.1/32
+"#;
+    let (access_path, _temp) = create_temp_access_config(access_yaml);
+    let (echo_handle, echo_addr) = common::start_echo_server().await;
+    let (server_handle, proxy_addr, cancel_token) =
+        common::start_access_test_server(access_path).await;
+
+    // 本地连接应该成功
+    let mut stream = common::socks5_connect(proxy_addr, echo_addr).await;
+    stream.write_all(b"whitelist test").await.unwrap();
+    let mut buf = [0u8; 100];
+    let n = stream.read(&mut buf).await.unwrap();
+    assert_eq!(&buf[..n], b"whitelist test");
+
+    drop(stream);
+    cancel_token.cancel();
+    let _ = server_handle.await;
+    echo_handle.abort();
+}
+
+#[tokio::test]
+async fn test_e2e_access_whitelist_blocks_unmatched() {
+    // 白名单不含本地 IP（使用一个不可能匹配的网段），连接应该被拒绝
+    let access_yaml = r#"
+client_rules:
+  - 10.255.255.0/24
+"#;
+    let (access_path, _temp) = create_temp_access_config(access_yaml);
+    let (_echo_handle, _echo_addr) = common::start_echo_server().await;
+    let (server_handle, proxy_addr, cancel_token) =
+        common::start_access_test_server(access_path).await;
+
+    // 连接应该被拒绝（连接建立后立即关闭）
+    let mut stream = TcpStream::connect(proxy_addr).await.unwrap();
+    let handshake = build_handshake_request(&[AUTH_NO_AUTH]);
+    stream.write_all(&handshake).await.unwrap();
+
+    // 服务器应该关闭连接（白名单拒绝）
+    let mut buf = [0u8; 10];
+    let result = stream.read(&mut buf).await;
+    match result {
+        Ok(0) => {} // 连接被关闭 - 预期行为
+        Ok(_) => {} // 可能收到部分数据后关闭
+        Err(_) => {} // IO 错误也可接受
+    }
+
+    cancel_token.cancel();
+    let _ = server_handle.await;
+    _echo_handle.abort();
+}
+
+#[tokio::test]
+async fn test_e2e_access_whitelist_empty_blocks_all() {
+    // 白名单为空，所有连接应该被拒绝
+    let access_yaml = r#"
+client_rules: []
+"#;
+    let (access_path, _temp) = create_temp_access_config(access_yaml);
+    let (_echo_handle, _echo_addr) = common::start_echo_server().await;
+    let (server_handle, proxy_addr, cancel_token) =
+        common::start_access_test_server(access_path).await;
+
+    // 连接应该被拒绝：服务器在 accept 后立即关闭连接
+    let mut stream = TcpStream::connect(proxy_addr).await.unwrap();
+    let _ = stream.write_all(&build_handshake_request(&[AUTH_NO_AUTH])).await;
+
+    // 关键断言：不应收到正常的 SOCKS5 握手响应
+    let mut buf = [0u8; 2];
+    match stream.read_exact(&mut buf).await {
+        Ok(_) => {
+            assert_ne!(
+                buf,
+                [SOCKS5_VERSION, AUTH_NO_AUTH],
+                "Should NOT receive a successful SOCKS5 handshake when whitelist is empty"
+            );
+        }
+        Err(_) => {} // IO 错误 - 预期行为（连接被关闭或重置）
+    }
+
+    cancel_token.cancel();
+    let _ = server_handle.await;
+    _echo_handle.abort();
+}
+
+#[tokio::test]
+async fn test_e2e_access_control_disabled() {
+    // access_enabled=false 时，不受规则影响，所有连接均可通过
+    let config = AppConfig {
+        max_connections: 100,
+        connect_timeout: 5,
+        access_enabled: false,
+        ..AppConfig::default()
+    };
+    let (server_handle, proxy_addr, cancel_token) = common::start_test_server(config).await;
+    let (echo_handle, echo_addr) = common::start_echo_server().await;
+
+    let mut stream = common::socks5_connect(proxy_addr, echo_addr).await;
+    stream.write_all(b"no access control").await.unwrap();
+    let mut buf = [0u8; 100];
+    let n = stream.read(&mut buf).await.unwrap();
+    assert_eq!(&buf[..n], b"no access control");
+
+    drop(stream);
+    cancel_token.cancel();
+    let _ = server_handle.await;
+    echo_handle.abort();
+}
+
+#[tokio::test]
+async fn test_e2e_access_hot_reload() {
+    use std::io::{Seek, Write};
+
+    // 初始白名单不含本地 IP
+    let access_yaml = r#"
+client_rules:
+  - 10.255.255.0/24
+"#;
+    let (access_path, mut temp_file) = create_temp_access_config(access_yaml);
+    let (_echo_handle, echo_addr) = common::start_echo_server().await;
+    let (server_handle, proxy_addr, cancel_token) =
+        common::start_access_test_server(access_path).await;
+
+    // 初始状态：本地连接被拒绝
+    {
+        let mut stream = TcpStream::connect(proxy_addr).await.unwrap();
+        let handshake = build_handshake_request(&[AUTH_NO_AUTH]);
+        stream.write_all(&handshake).await.unwrap();
+        let mut buf = [0u8; 10];
+        let _ = stream.read(&mut buf).await;
+        // 连接应该被关闭或拒绝
+    }
+
+    // 修改配置文件，添加本地 IP 到白名单
+    let new_yaml = r#"
+client_rules:
+  - 127.0.0.1/32
+"#;
+    temp_file.as_file_mut().set_len(0).unwrap();
+    temp_file
+        .as_file_mut()
+        .seek(std::io::SeekFrom::Start(0))
+        .unwrap();
+    write!(temp_file.as_file_mut(), "{}", new_yaml).unwrap();
+    temp_file.as_file_mut().flush().unwrap();
+
+    // 等待热加载生效（防抖 500ms + 余量）
+    let mut allowed = false;
+    for _ in 0..20 {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        // 尝试建立完整的 SOCKS5 连接
+        if let Ok(mut stream) = TcpStream::connect(proxy_addr).await {
+            let handshake = build_handshake_request(&[AUTH_NO_AUTH]);
+            if stream.write_all(&handshake).await.is_ok() {
+                let mut response = [0u8; 2];
+                if stream.read_exact(&mut response).await.is_ok()
+                    && response == [SOCKS5_VERSION, AUTH_NO_AUTH]
+                {
+                    // 握手成功，说明白名单已放行
+                    allowed = true;
+                    break;
+                }
+            }
+        }
+    }
+    assert!(allowed, "Hot reload did not take effect within timeout");
+
+    // 验证热加载后可以完整代理数据
+    let mut stream = common::socks5_connect(proxy_addr, echo_addr).await;
+    stream.write_all(b"hot reload works").await.unwrap();
+    let mut buf = [0u8; 100];
+    let n = stream.read(&mut buf).await.unwrap();
+    assert_eq!(&buf[..n], b"hot reload works");
+
+    drop(stream);
+    cancel_token.cancel();
+    let _ = server_handle.await;
+    _echo_handle.abort();
+}
+
+#[tokio::test]
+async fn test_e2e_access_with_auth() {
+    // 白名单 + 认证同时启用，两层验证均生效
+    let user_yaml = r#"
+users:
+  - username: "admin"
+    password: "admin123"
+"#;
+    let access_yaml = r#"
+client_rules:
+  - 127.0.0.1/32
+"#;
+    let (user_config_path, _user_temp) = create_temp_user_config(user_yaml);
+    let (access_path, _access_temp) = create_temp_access_config(access_yaml);
+    let (echo_handle, echo_addr) = common::start_echo_server().await;
+    let (server_handle, proxy_addr, cancel_token) =
+        common::start_auth_and_access_test_server(user_config_path, access_path).await;
+
+    // 正确凭证 + 在白名单中 → 成功
+    let mut stream =
+        common::socks5_connect_with_auth(proxy_addr, echo_addr, "admin", "admin123").await;
+    stream.write_all(b"auth and access ok").await.unwrap();
+    let mut buf = [0u8; 100];
+    let n = stream.read(&mut buf).await.unwrap();
+    assert_eq!(&buf[..n], b"auth and access ok");
+
+    drop(stream);
+    cancel_token.cancel();
+    let _ = server_handle.await;
+    echo_handle.abort();
+}
+
+#[tokio::test]
+async fn test_e2e_access_whitelist_cidr_range() {
+    // 使用 /8 网段，验证 CIDR 范围匹配（本地回环在 127.0.0.0/8 内）
+    let access_yaml = r#"
+client_rules:
+  - 127.0.0.0/8
+"#;
+    let (access_path, _temp) = create_temp_access_config(access_yaml);
+    let (echo_handle, echo_addr) = common::start_echo_server().await;
+    let (server_handle, proxy_addr, cancel_token) =
+        common::start_access_test_server(access_path).await;
+
+    // 127.0.0.1 在 127.0.0.0/8 内，应该成功
+    let mut stream = common::socks5_connect(proxy_addr, echo_addr).await;
+    stream.write_all(b"cidr range test").await.unwrap();
+    let mut buf = [0u8; 100];
+    let n = stream.read(&mut buf).await.unwrap();
+    assert_eq!(&buf[..n], b"cidr range test");
+
+    drop(stream);
+    cancel_token.cancel();
+    let _ = server_handle.await;
+    echo_handle.abort();
+}

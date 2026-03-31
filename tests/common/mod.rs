@@ -220,6 +220,59 @@ pub async fn start_auth_test_server(
     (handle, addr, token)
 }
 
+/// 启动启用白名单访问控制的 exsocks 测试服务器
+pub async fn start_access_test_server(
+    access_file: PathBuf,
+) -> (
+    tokio::task::JoinHandle<Result<(), exsocks::error::SocksError>>,
+    SocketAddr,
+    CancellationToken,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let token = CancellationToken::new();
+    let token_clone = token.clone();
+
+    let mut config = AppConfig::default();
+    config.access_enabled = true;
+    config.access_file = access_file;
+
+    let handle = tokio::spawn(async move {
+        exsocks::server::run_with_listener(config, listener, Some(token_clone)).await
+    });
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    (handle, addr, token)
+}
+
+/// 启动同时启用认证和白名单访问控制的 exsocks 测试服务器
+pub async fn start_auth_and_access_test_server(
+    user_config_path: PathBuf,
+    access_file: PathBuf,
+) -> (
+    tokio::task::JoinHandle<Result<(), exsocks::error::SocksError>>,
+    SocketAddr,
+    CancellationToken,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let token = CancellationToken::new();
+    let token_clone = token.clone();
+
+    let mut config = AppConfig::default();
+    config.auth_enabled = true;
+    config.auth_user_file = user_config_path;
+    config.access_enabled = true;
+    config.access_file = access_file;
+
+    let handle = tokio::spawn(async move {
+        exsocks::server::run_with_listener(config, listener, Some(token_clone)).await
+    });
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    (handle, addr, token)
+}
+
 /// 执行带认证的 SOCKS5 握手 + CONNECT
 pub async fn socks5_connect_with_auth(
     proxy: SocketAddr,

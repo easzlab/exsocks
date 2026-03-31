@@ -91,3 +91,18 @@ auth_enabled: false
 # 仅在 auth_enabled 为 true 时生效
 # 默认: "user.yaml"
 auth_user_file: "user.yaml"
+
+# ========== 客户端源地址白名单配置 ==========
+
+# 是否启用客户端源地址白名单
+# 启用后，只有在 access_file 中配置的 CIDR 范围内的客户端 IP 才允许连接
+# 白名单为空时拒绝所有连接（符合最小权限原则）
+# 默认: false
+access_enabled: false
+
+# 客户端白名单配置文件路径
+# 支持相对路径（相对于工作目录）和绝对路径
+# 该文件支持热加载，修改后自动生效，无需重启服务
+# 仅在 access_enabled 为 true 时生效
+# 默认: "client-rules.yaml"
+access_file: "client-rules.yaml"

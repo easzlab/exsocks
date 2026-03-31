@@ -7,8 +7,9 @@ use tokio::signal;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
-use tracing::{debug, error, info, info_span};
+use tracing::{debug, error, info, info_span, warn};
 
+use crate::access::AccessControl;
 use crate::auth::UserStore;
 use crate::buffer_pool::BufferPool;
 use crate::config::AppConfig;
@@ -44,7 +45,7 @@ pub async fn run_with_listener(
         buffer_size = relay_buffer_size,
         "Buffer pool initialized"
     );
-    let cancel_token = external_token.unwrap_or_else(CancellationToken::new);
+    let cancel_token = external_token.unwrap_or_default();
     let dns_cache = if config.dns_cache_ttl > 0 {
         let cache = Arc::new(DnsCache::new(
             Duration::from_secs(config.dns_cache_ttl),
@@ -90,6 +91,31 @@ pub async fn run_with_listener(
         None
     };
 
+    // 初始化客户端源地址白名单
+    let access_control = if config.access_enabled {
+        let ac = Arc::new(
+            AccessControl::load(&config.access_file).map_err(|e| {
+                SocksError::AccessConfig(format!("Failed to load access config: {}", e))
+            })?,
+        );
+        let _watcher = ac.watch().map_err(|e| {
+            SocksError::AccessConfig(format!("Failed to start access config watcher: {}", e))
+        })?;
+        let watcher_token = cancel_token.clone();
+        tokio::spawn(async move {
+            watcher_token.cancelled().await;
+            drop(_watcher);
+        });
+        info!(
+            path = %config.access_file.display(),
+            "Access control (whitelist) enabled with hot-reload"
+        );
+        Some(ac)
+    } else {
+        info!("Access control disabled, accepting all source addresses");
+        None
+    };
+
     info!("Max connections: {}", config.max_connections);
 
     loop {
@@ -97,6 +123,16 @@ pub async fn run_with_listener(
             result = listener.accept() => {
                 let (socket, peer_addr) = result?;
                 socket.set_nodelay(true)?;
+
+                // 白名单检查在 accept 后立即执行，避免为被拒绝的连接创建 tokio task 和消耗 permit
+                if let Some(ac) = &access_control
+                    && !ac.rules().is_allowed(peer_addr.ip())
+                {
+                    warn!(ip = %peer_addr.ip(), "Connection blocked by whitelist");
+                    drop(socket);
+                    continue;
+                }
+
                 let limiter = limiter.clone();
                 let dns_cache = dns_cache.clone();
                 let pool = buffer_pool.clone();
@@ -126,6 +162,7 @@ pub async fn run_with_listener(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_connection(
     mut socket: TcpStream,
     _peer_addr: SocketAddr,

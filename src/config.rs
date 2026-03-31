@@ -73,6 +73,11 @@ fn default_auth_user_file() -> PathBuf {
     PathBuf::from("user.yaml")
 }
 
+/// 默认客户端白名单配置文件路径
+fn default_access_file() -> PathBuf {
+    PathBuf::from("client-rules.yaml")
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AppConfig {
     #[serde(default = "default_bind")]
@@ -117,6 +122,15 @@ pub struct AppConfig {
     /// 支持热加载，修改后自动生效
     #[serde(default = "default_auth_user_file")]
     pub auth_user_file: PathBuf,
+    /// 是否启用客户端源地址白名单，默认 false
+    /// 启用后只有在 access_file 中配置的 CIDR 范围内的客户端才允许连接
+    #[serde(default)]
+    pub access_enabled: bool,
+    /// 客户端白名单配置文件路径，默认 "client-rules.yaml"
+    /// 仅在 access_enabled 为 true 时生效
+    /// 支持热加载，修改后自动生效
+    #[serde(default = "default_access_file")]
+    pub access_file: PathBuf,
 }
 
 impl AppConfig {
@@ -144,6 +158,11 @@ impl AppConfig {
             .set_default(
                 "auth_user_file",
                 default_auth_user_file().to_str().unwrap(),
+            )?
+            .set_default("access_enabled", false)?
+            .set_default(
+                "access_file",
+                default_access_file().to_str().unwrap(),
             )?;
 
         // 加载系统配置文件
@@ -234,6 +253,8 @@ impl Default for AppConfig {
             relay_pool_capacity: default_relay_pool_capacity(),
             auth_enabled: false,
             auth_user_file: default_auth_user_file(),
+            access_enabled: false,
+            access_file: default_access_file(),
         }
     }
 }
@@ -333,5 +354,45 @@ log_level: "debug"
         let path = temp_file.path().to_path_buf();
         let result = AppConfig::load(Some(&path));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_default_access_fields() {
+        let config = AppConfig::default();
+        assert!(!config.access_enabled);
+        assert_eq!(config.access_file, PathBuf::from("client-rules.yaml"));
+    }
+
+    #[test]
+    fn test_load_access_fields_from_yaml() {
+        let yaml_content = r#"
+access_enabled: true
+access_file: "/etc/exsocks/client-rules.yaml"
+"#;
+        let mut temp_file = Builder::new().suffix(".yaml").tempfile().unwrap();
+        write!(temp_file, "{}", yaml_content).unwrap();
+
+        let path = temp_file.path().to_path_buf();
+        let config = AppConfig::load(Some(&path)).unwrap();
+        assert!(config.access_enabled);
+        assert_eq!(
+            config.access_file,
+            PathBuf::from("/etc/exsocks/client-rules.yaml")
+        );
+    }
+
+    #[test]
+    fn test_access_fields_default_when_not_in_yaml() {
+        // 不包含 access 字段时，应使用默认值
+        let yaml_content = r#"
+bind: "0.0.0.0:1080"
+"#;
+        let mut temp_file = Builder::new().suffix(".yaml").tempfile().unwrap();
+        write!(temp_file, "{}", yaml_content).unwrap();
+
+        let path = temp_file.path().to_path_buf();
+        let config = AppConfig::load(Some(&path)).unwrap();
+        assert!(!config.access_enabled);
+        assert_eq!(config.access_file, PathBuf::from("client-rules.yaml"));
     }
 }

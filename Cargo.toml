@@ -1,6 +1,6 @@
 [package]
 name = "exsocks"
-version = "0.3.1"
+version = "0.4.0"
 edition = "2024"
 
 [dependencies]
@@ -21,6 +21,7 @@ crossbeam-queue = "0.3"
 notify = { version = "7", default-features = false, features = ["macos_fsevent"] }
 arc-swap = "1"
 serde_yaml = "0.9"
+ipnet = "2"
 
 [dev-dependencies]
 tokio-test = "0.4"
