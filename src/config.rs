@@ -78,6 +78,11 @@ fn default_access_file() -> PathBuf {
     PathBuf::from("client-rules.yaml")
 }
 
+/// 默认目标地址规则配置文件路径
+fn default_target_rules_file() -> PathBuf {
+    PathBuf::from("target-rules.yaml")
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AppConfig {
     #[serde(default = "default_bind")]
@@ -131,6 +136,15 @@ pub struct AppConfig {
     /// 支持热加载，修改后自动生效
     #[serde(default = "default_access_file")]
     pub access_file: PathBuf,
+    /// 是否启用目标地址规则管控，默认 false
+    /// 启用后根据配置的规则对目标地址（IP/域名）和端口进行匹配检查
+    #[serde(default)]
+    pub target_rules_enabled: bool,
+    /// 目标地址规则配置文件路径，默认 "target-rules.yaml"
+    /// 仅在 target_rules_enabled 为 true 时生效
+    /// 支持热加载，修改后自动生效
+    #[serde(default = "default_target_rules_file")]
+    pub target_rules_file: PathBuf,
 }
 
 impl AppConfig {
@@ -163,6 +177,11 @@ impl AppConfig {
             .set_default(
                 "access_file",
                 default_access_file().to_str().unwrap(),
+            )?
+            .set_default("target_rules_enabled", false)?
+            .set_default(
+                "target_rules_file",
+                default_target_rules_file().to_str().unwrap(),
             )?;
 
         // 加载系统配置文件
@@ -255,6 +274,8 @@ impl Default for AppConfig {
             auth_user_file: default_auth_user_file(),
             access_enabled: false,
             access_file: default_access_file(),
+            target_rules_enabled: false,
+            target_rules_file: default_target_rules_file(),
         }
     }
 }
@@ -281,6 +302,8 @@ mod tests {
         assert_eq!(config.dns_cache_negative_ttl, 30);
         assert_eq!(config.relay_pool_capacity, 0);
         assert_eq!(config.effective_pool_capacity(), 1024 * 2);
+        assert!(!config.target_rules_enabled);
+        assert_eq!(config.target_rules_file, PathBuf::from("target-rules.yaml"));
     }
 
     #[test]
@@ -394,5 +417,44 @@ bind: "0.0.0.0:1080"
         let config = AppConfig::load(Some(&path)).unwrap();
         assert!(!config.access_enabled);
         assert_eq!(config.access_file, PathBuf::from("client-rules.yaml"));
+    }
+
+    #[test]
+    fn test_default_target_rules_fields() {
+        let config = AppConfig::default();
+        assert!(!config.target_rules_enabled);
+        assert_eq!(config.target_rules_file, PathBuf::from("target-rules.yaml"));
+    }
+
+    #[test]
+    fn test_load_target_rules_fields_from_yaml() {
+        let yaml_content = r#"
+target_rules_enabled: true
+target_rules_file: "/etc/exsocks/target-rules.yaml"
+"#;
+        let mut temp_file = Builder::new().suffix(".yaml").tempfile().unwrap();
+        write!(temp_file, "{}", yaml_content).unwrap();
+
+        let path = temp_file.path().to_path_buf();
+        let config = AppConfig::load(Some(&path)).unwrap();
+        assert!(config.target_rules_enabled);
+        assert_eq!(
+            config.target_rules_file,
+            PathBuf::from("/etc/exsocks/target-rules.yaml")
+        );
+    }
+
+    #[test]
+    fn test_target_rules_fields_default_when_not_in_yaml() {
+        let yaml_content = r#"
+bind: "0.0.0.0:1080"
+"#;
+        let mut temp_file = Builder::new().suffix(".yaml").tempfile().unwrap();
+        write!(temp_file, "{}", yaml_content).unwrap();
+
+        let path = temp_file.path().to_path_buf();
+        let config = AppConfig::load(Some(&path)).unwrap();
+        assert!(!config.target_rules_enabled);
+        assert_eq!(config.target_rules_file, PathBuf::from("target-rules.yaml"));
     }
 }

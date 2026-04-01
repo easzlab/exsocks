@@ -273,6 +273,42 @@ pub async fn start_auth_and_access_test_server(
     (handle, addr, token)
 }
 
+/// 创建临时目标规则配置文件，返回 (文件路径, TempFile)
+pub fn create_temp_target_rules_config(yaml: &str) -> (PathBuf, tempfile::NamedTempFile) {
+    let mut temp_file = tempfile::Builder::new()
+        .suffix(".yaml")
+        .tempfile()
+        .unwrap();
+    write!(temp_file, "{}", yaml).unwrap();
+    let path = temp_file.path().to_path_buf();
+    (path, temp_file)
+}
+
+/// 启动启用目标地址规则管控的 exsocks 测试服务器
+pub async fn start_target_rules_test_server(
+    target_rules_file: PathBuf,
+) -> (
+    tokio::task::JoinHandle<Result<(), exsocks::error::SocksError>>,
+    SocketAddr,
+    CancellationToken,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let token = CancellationToken::new();
+    let token_clone = token.clone();
+
+    let mut config = AppConfig::default();
+    config.target_rules_enabled = true;
+    config.target_rules_file = target_rules_file;
+
+    let handle = tokio::spawn(async move {
+        exsocks::server::run_with_listener(config, listener, Some(token_clone)).await
+    });
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    (handle, addr, token)
+}
+
 /// 执行带认证的 SOCKS5 握手 + CONNECT
 pub async fn socks5_connect_with_auth(
     proxy: SocketAddr,

@@ -49,6 +49,12 @@ pub enum SocksError {
 
     #[error("Access config error: {0}")]
     AccessConfig(String),
+
+    #[error("Target denied: {0}:{1}")]
+    TargetDenied(String, u16),
+
+    #[error("Target rules config error: {0}")]
+    TargetRulesConfig(String),
 }
 
 impl From<config::ConfigError> for SocksError {

@@ -18,7 +18,8 @@ use crate::error::SocksError;
 use crate::limiter::ConnectionLimiter;
 use crate::relay;
 use crate::socks5;
-use crate::socks5::protocol::REP_SUCCEEDED;
+use crate::socks5::protocol::{REP_CONNECTION_NOT_ALLOWED, REP_SUCCEEDED};
+use crate::target_rules::TargetRuleControl;
 
 pub async fn run(config: AppConfig) -> Result<(), SocksError> {
     let listener = TcpListener::bind(config.bind).await?;
@@ -116,6 +117,37 @@ pub async fn run_with_listener(
         None
     };
 
+    // 初始化目标地址规则管控
+    let target_rule_control = if config.target_rules_enabled {
+        let trc = Arc::new(
+            TargetRuleControl::load(&config.target_rules_file).map_err(|e| {
+                SocksError::TargetRulesConfig(format!(
+                    "Failed to load target rules config: {}",
+                    e
+                ))
+            })?,
+        );
+        let _watcher = trc.watch().map_err(|e| {
+            SocksError::TargetRulesConfig(format!(
+                "Failed to start target rules config watcher: {}",
+                e
+            ))
+        })?;
+        let watcher_token = cancel_token.clone();
+        tokio::spawn(async move {
+            watcher_token.cancelled().await;
+            drop(_watcher);
+        });
+        info!(
+            path = %config.target_rules_file.display(),
+            "Target rules enabled with hot-reload"
+        );
+        Some(trc)
+    } else {
+        info!("Target rules disabled, allowing all destinations");
+        None
+    };
+
     info!("Max connections: {}", config.max_connections);
 
     loop {
@@ -137,10 +169,11 @@ pub async fn run_with_listener(
                 let dns_cache = dns_cache.clone();
                 let pool = buffer_pool.clone();
                 let user_store = user_store.clone();
+                let trc = target_rule_control.clone();
                 let token = cancel_token.child_token();
 
                 tokio::spawn(async move {
-                    let result = handle_connection(socket, peer_addr, limiter, connect_timeout, pool, dns_cache, user_store, token).await;
+                    let result = handle_connection(socket, peer_addr, limiter, connect_timeout, pool, dns_cache, user_store, trc, token).await;
                     if let Err(e) = result {
                         error!(error = %e, "Connection error");
                     }
@@ -171,6 +204,7 @@ async fn handle_connection(
     pool: Arc<BufferPool>,
     dns_cache: Option<Arc<DnsCache>>,
     user_store: Option<Arc<UserStore>>,
+    target_rule_control: Option<Arc<TargetRuleControl>>,
     cancel: CancellationToken,
 ) -> Result<(), SocksError> {
     let _permit = match limiter.acquire() {
@@ -185,6 +219,26 @@ async fn handle_connection(
 
     let request = socks5::parse_request(&mut socket).await?;
     debug!(target = %request.address, port = request.port, "CONNECT");
+
+    // 目标地址规则检查
+    if let Some(trc) = &target_rule_control {
+        let result = trc.rules().check(&request.address, request.port);
+        if result.log {
+            if result.allowed {
+                info!(target = %request.address, port = request.port, "Target PASS by rule");
+            } else {
+                warn!(target = %request.address, port = request.port, "Target BLOCKED by rule");
+            }
+        }
+        if !result.allowed {
+            let dummy_addr = std::net::SocketAddr::from(([0, 0, 0, 0], 0));
+            socks5::send_reply(&mut socket, REP_CONNECTION_NOT_ALLOWED, dummy_addr).await?;
+            return Err(SocksError::TargetDenied(
+                request.address.to_string(),
+                request.port,
+            ));
+        }
+    }
 
     let target = match timeout(
         connect_timeout,

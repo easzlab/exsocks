@@ -993,3 +993,166 @@ client_rules:
     let _ = server_handle.await;
     echo_handle.abort();
 }
+
+// ========== 目标地址规则管控 E2E 测试 ==========
+
+#[tokio::test]
+async fn test_e2e_target_rules_pass() {
+    // 目标地址在 PASS 规则中，连接应该成功并能正常传输数据
+    let target_rules_yaml = r#"
+target_rules:
+  - [IPCIDR, 127.0.0.0/8, 0, 65535, PASS, "00000001", 0]
+  - [IPCIDR, 0.0.0.0/0, 0, 65535, BLOCK, "00000001", 0]
+"#;
+    let (rules_path, _temp) = common::create_temp_target_rules_config(target_rules_yaml);
+    let (echo_handle, echo_addr) = common::start_echo_server().await;
+    let (server_handle, proxy_addr, cancel_token) =
+        common::start_target_rules_test_server(rules_path).await;
+
+    // echo server 监听在 127.0.0.1，匹配 127.0.0.0/8 PASS 规则，应该成功
+    let mut stream = common::socks5_connect(proxy_addr, echo_addr).await;
+    stream.write_all(b"target rules pass").await.unwrap();
+    let mut buf = [0u8; 100];
+    let n = stream.read(&mut buf).await.unwrap();
+    assert_eq!(&buf[..n], b"target rules pass");
+
+    drop(stream);
+    cancel_token.cancel();
+    let _ = server_handle.await;
+    echo_handle.abort();
+}
+
+#[tokio::test]
+async fn test_e2e_target_rules_block_default() {
+    // 目标地址不匹配任何 PASS 规则，默认 BLOCK
+    // 配置一个只允许 10.0.0.0/8 的规则，echo server 在 127.0.0.1 上，应该被阻止
+    let target_rules_yaml = r#"
+target_rules:
+  - [IPCIDR, 10.0.0.0/8, 0, 65535, PASS]
+"#;
+    let (rules_path, _temp) = common::create_temp_target_rules_config(target_rules_yaml);
+    let (echo_handle, echo_addr) = common::start_echo_server().await;
+    let (server_handle, proxy_addr, cancel_token) =
+        common::start_target_rules_test_server(rules_path).await;
+
+    // echo server 在 127.0.0.1，不在 10.0.0.0/8 范围内，应该被 BLOCK
+    let mut stream = TcpStream::connect(proxy_addr).await.unwrap();
+
+    // 握手
+    let handshake = build_handshake_request(&[AUTH_NO_AUTH]);
+    stream.write_all(&handshake).await.unwrap();
+    let mut response = [0u8; 2];
+    stream.read_exact(&mut response).await.unwrap();
+    assert_eq!(response, [SOCKS5_VERSION, AUTH_NO_AUTH]);
+
+    // CONNECT 请求
+    let addr = match echo_addr {
+        SocketAddr::V4(v4) => Address::IPv4(*v4.ip()),
+        SocketAddr::V6(v6) => Address::IPv6(*v6.ip()),
+    };
+    let request = common::build_connect_request(&addr, echo_addr.port());
+    stream.write_all(&request).await.unwrap();
+
+    // 应该收到 REP_CONNECTION_NOT_ALLOWED (0x02) 回复
+    let mut reply = [0u8; 10];
+    let result = stream.read_exact(&mut reply).await;
+    match result {
+        Ok(_) => {
+            assert_eq!(reply[0], SOCKS5_VERSION);
+            assert_eq!(
+                reply[1], REP_CONNECTION_NOT_ALLOWED,
+                "Expected REP_CONNECTION_NOT_ALLOWED (0x02), got 0x{:02x}",
+                reply[1]
+            );
+        }
+        Err(_) => {
+            // 连接被关闭也是可接受的（服务器可能在发送回复后立即关闭）
+        }
+    }
+
+    drop(stream);
+
+    // 验证服务器仍然正常运行（允许的目标应该可以连接）
+    // 这里不做额外验证，因为没有匹配 10.0.0.0/8 的 echo server
+
+    cancel_token.cancel();
+    let _ = server_handle.await;
+    echo_handle.abort();
+}
+
+#[tokio::test]
+async fn test_e2e_target_rules_hot_reload() {
+    use std::io::{Seek, Write};
+
+    // 初始规则：只允许 10.0.0.0/8，echo server 在 127.0.0.1 上会被阻止
+    let target_rules_yaml = r#"
+target_rules:
+  - [IPCIDR, 10.0.0.0/8, 0, 65535, PASS]
+"#;
+    let (rules_path, mut temp_file) = common::create_temp_target_rules_config(target_rules_yaml);
+    let (echo_handle, echo_addr) = common::start_echo_server().await;
+    let (server_handle, proxy_addr, cancel_token) =
+        common::start_target_rules_test_server(rules_path).await;
+
+    // 初始状态：127.0.0.1 的 echo server 应该被阻止
+    {
+        let mut stream = TcpStream::connect(proxy_addr).await.unwrap();
+        let handshake = build_handshake_request(&[AUTH_NO_AUTH]);
+        stream.write_all(&handshake).await.unwrap();
+        let mut response = [0u8; 2];
+        stream.read_exact(&mut response).await.unwrap();
+        assert_eq!(response, [SOCKS5_VERSION, AUTH_NO_AUTH]);
+
+        let addr = match echo_addr {
+            SocketAddr::V4(v4) => Address::IPv4(*v4.ip()),
+            SocketAddr::V6(v6) => Address::IPv6(*v6.ip()),
+        };
+        let request = common::build_connect_request(&addr, echo_addr.port());
+        stream.write_all(&request).await.unwrap();
+
+        let mut reply = [0u8; 10];
+        if let Ok(_) = stream.read_exact(&mut reply).await {
+            assert_eq!(reply[1], REP_CONNECTION_NOT_ALLOWED);
+        }
+        drop(stream);
+    }
+
+    // 修改配置文件，添加 127.0.0.0/8 到 PASS 规则
+    let new_yaml = r#"
+target_rules:
+  - [IPCIDR, 127.0.0.0/8, 0, 65535, PASS]
+  - [IPCIDR, 10.0.0.0/8, 0, 65535, PASS]
+"#;
+    temp_file.as_file_mut().set_len(0).unwrap();
+    temp_file
+        .as_file_mut()
+        .seek(std::io::SeekFrom::Start(0))
+        .unwrap();
+    write!(temp_file.as_file_mut(), "{}", new_yaml).unwrap();
+    temp_file.as_file_mut().flush().unwrap();
+
+    // 等待热加载生效（防抖 500ms + 余量）
+    let mut reloaded = false;
+    for _ in 0..20 {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        // 尝试完整的 SOCKS5 代理连接
+        if let Ok(mut stream) = try_socks5_connect(proxy_addr, echo_addr).await {
+            // 连接成功，说明热加载已生效
+            stream.write_all(b"hot reload ok").await.unwrap();
+            let mut buf = [0u8; 100];
+            let n = stream.read(&mut buf).await.unwrap();
+            assert_eq!(&buf[..n], b"hot reload ok");
+            drop(stream);
+            reloaded = true;
+            break;
+        }
+    }
+    assert!(
+        reloaded,
+        "Target rules hot reload did not take effect within timeout"
+    );
+
+    cancel_token.cancel();
+    let _ = server_handle.await;
+    echo_handle.abort();
+}
