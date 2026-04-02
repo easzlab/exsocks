@@ -424,7 +424,7 @@ dependencies = [
 
 [[package]]
 name = "exsocks"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "arc-swap",
  "bytes",

@@ -1,4 +1,5 @@
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use tracing::debug;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -46,7 +47,16 @@ pub async fn parse_request(stream: &mut TcpStream) -> Result<ConnectRequest, Soc
             let domain = std::str::from_utf8(&domain_buf[..len])
                 .map_err(|e| SocksError::InvalidAddress(format!("Invalid domain encoding: {}", e)))?
                 .to_owned();
-            Address::Domain(domain)
+            // 兼容不规范客户端：ATYP=DOMAIN 但实际发送 IP 地址字符串
+            if let Ok(ip) = domain.parse::<IpAddr>() {
+                debug!(raw_domain = %domain, parsed_ip = %ip, "ATYP=DOMAIN but content is IP, auto-converting");
+                match ip {
+                    IpAddr::V4(v4) => Address::IPv4(v4),
+                    IpAddr::V6(v6) => Address::IPv6(v6),
+                }
+            } else {
+                Address::Domain(domain)
+            }
         }
         ATYP_IPV6 => {
             let mut buf = [0u8; 16];

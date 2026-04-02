@@ -1156,3 +1156,64 @@ target_rules:
     let _ = server_handle.await;
     echo_handle.abort();
 }
+
+/// 兼容性 E2E 测试：客户端使用 ATYP=DOMAIN 但发送 IP 地址字符串时，
+/// 目标地址规则匹配应正确走 IPCIDR 分支而非域名分支。
+///
+/// 场景：目标规则只配置了 IPCIDR 127.0.0.0/8 PASS（无域名规则），
+/// 客户端用 Address::Domain("127.0.0.1") 发起 CONNECT 请求。
+/// - 如果兼容逻辑生效：地址被转换为 IPv4 → 匹配 IPCIDR 规则 → PASS → 连接成功
+/// - 如果兼容逻辑不生效：地址保持 Domain → 走域名匹配 → 无匹配 → 默认 BLOCK
+#[tokio::test]
+async fn test_e2e_target_rules_domain_atyp_with_ip_string() {
+    // 目标规则：只有 IPCIDR 规则，没有域名规则
+    // 如果 ATYP=DOMAIN + IP 字符串没有被兼容转换，将走域名匹配 → 无匹配 → 默认 BLOCK
+    let target_rules_yaml = r#"
+target_rules:
+  - [IPCIDR, 127.0.0.0/8, 0, 65535, PASS, "00000001", 0]
+  - [IPCIDR, 0.0.0.0/0, 0, 65535, BLOCK, "00000001", 0]
+"#;
+    let (rules_path, _temp) = common::create_temp_target_rules_config(target_rules_yaml);
+    let (echo_handle, echo_addr) = common::start_echo_server().await;
+    let (server_handle, proxy_addr, cancel_token) =
+        common::start_target_rules_test_server(rules_path).await;
+
+    // 模拟不规范客户端：ATYP=DOMAIN，但 DST.ADDR 内容是 IP 地址字符串
+    let mut stream = TcpStream::connect(proxy_addr).await.unwrap();
+
+    // 握手
+    let handshake = common::build_handshake_request(&[AUTH_NO_AUTH]);
+    stream.write_all(&handshake).await.unwrap();
+    let mut response = [0u8; 2];
+    stream.read_exact(&mut response).await.unwrap();
+    assert_eq!(response, [SOCKS5_VERSION, AUTH_NO_AUTH]);
+
+    // CONNECT 请求：使用 Address::Domain("127.0.0.1") 模拟不规范客户端
+    let ip_as_domain = Address::Domain(format!("127.0.0.1"));
+    let request = common::build_connect_request(&ip_as_domain, echo_addr.port());
+    stream.write_all(&request).await.unwrap();
+
+    // 如果兼容逻辑生效，应该收到 REP_SUCCEEDED（IP 被正确识别并走 IPCIDR 匹配）
+    let mut reply = [0u8; 10];
+    stream.read_exact(&mut reply).await.unwrap();
+    assert_eq!(reply[0], SOCKS5_VERSION);
+    assert_eq!(
+        reply[1], REP_SUCCEEDED,
+        "ATYP=DOMAIN with IP string should be auto-converted and match IPCIDR rule, got reply 0x{:02x}",
+        reply[1]
+    );
+
+    // 验证数据能正常转发
+    stream
+        .write_all(b"domain-atyp-ip-compat")
+        .await
+        .unwrap();
+    let mut buf = [0u8; 100];
+    let n = stream.read(&mut buf).await.unwrap();
+    assert_eq!(&buf[..n], b"domain-atyp-ip-compat");
+
+    drop(stream);
+    cancel_token.cancel();
+    let _ = server_handle.await;
+    echo_handle.abort();
+}
