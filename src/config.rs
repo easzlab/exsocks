@@ -59,11 +59,6 @@ fn default_log_max_size() -> u64 {
     0
 }
 
-/// 默认缓冲区池容量：0 表示使用默认值 2048
-fn default_relay_pool_capacity() -> usize {
-    0
-}
-
 /// 默认用户认证配置文件路径
 fn default_auth_user_file() -> PathBuf {
     PathBuf::from("user.yaml")
@@ -108,9 +103,6 @@ pub struct AppConfig {
     /// DNS 负缓存 TTL（秒），解析失败时缓存的时间，默认 30
     #[serde(default = "default_dns_cache_negative_ttl")]
     pub dns_cache_negative_ttl: u64,
-    /// 缓冲区对象池容量，0 表示使用默认值 2048
-    #[serde(default = "default_relay_pool_capacity")]
-    pub relay_pool_capacity: usize,
     /// 是否启用用户名/密码认证（RFC1929），默认 false
     /// 启用后客户端必须提供有效的用户名和密码
     /// 未启用时同时接受无认证和用户名密码认证，但不校验凭证
@@ -160,7 +152,6 @@ impl AppConfig {
                 "dns_cache_negative_ttl",
                 default_dns_cache_negative_ttl() as i64,
             )?
-            .set_default("relay_pool_capacity", default_relay_pool_capacity() as i64)?
             .set_default("auth_enabled", false)?
             .set_default(
                 "auth_user_file",
@@ -231,17 +222,6 @@ impl AppConfig {
         }
     }
 
-    /// 返回实际生效的缓冲区池容量
-    ///
-    /// 如果 `relay_pool_capacity` 大于 0，直接使用该值；
-    /// 否则使用默认值 2048。
-    pub fn effective_pool_capacity(&self) -> usize {
-        if self.relay_pool_capacity > 0 {
-            self.relay_pool_capacity
-        } else {
-            2048
-        }
-    }
 }
 
 impl Default for AppConfig {
@@ -257,7 +237,6 @@ impl Default for AppConfig {
             dns_cache_ttl: default_dns_cache_ttl(),
             dns_cache_max_entries: default_dns_cache_max_entries(),
             dns_cache_negative_ttl: default_dns_cache_negative_ttl(),
-            relay_pool_capacity: default_relay_pool_capacity(),
             auth_enabled: false,
             auth_user_file: default_auth_user_file(),
             access_enabled: false,
@@ -287,8 +266,6 @@ mod tests {
         assert_eq!(config.dns_cache_ttl, 300);
         assert_eq!(config.dns_cache_max_entries, 1024);
         assert_eq!(config.dns_cache_negative_ttl, 30);
-        assert_eq!(config.relay_pool_capacity, 0);
-        assert_eq!(config.effective_pool_capacity(), 2048);
         assert!(!config.target_rules_enabled);
         assert_eq!(config.target_rules_file, PathBuf::from("target-rules.yaml"));
     }

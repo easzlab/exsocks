@@ -101,9 +101,6 @@ log_max_size: 104857600  # 100MB
 # 转发缓冲区大小（字节），默认 64KB
 relay_buffer_size: 65536
 
-# 缓冲区对象池容量，0 = 使用默认值 2048
-relay_pool_capacity: 0
-
 # DNS 缓存配置
 dns_cache_ttl: 300            # 正缓存 TTL（秒）
 dns_cache_max_entries: 1024   # 最大缓存条目数
@@ -163,7 +160,6 @@ src/
 │   ├── request.rs    # CONNECT 请求解析
 │   └── reply.rs      # 响应构建
 ├── relay.rs          # 异步双向数据转发（可配置缓冲区）
-├── buffer_pool.rs    # 无锁缓冲区对象池（crossbeam ArrayQueue）
 ├── dns_cache.rs      # DNS 解析缓存（正缓存 + 负缓存）
 ├── auth.rs           # 用户认证存储与热加载（ArcSwap + notify）
 ├── access.rs         # 源地址白名单与热加载

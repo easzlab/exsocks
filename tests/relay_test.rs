@@ -1,17 +1,9 @@
 mod common;
 
-use std::sync::Arc;
-
-use exsocks::buffer_pool::BufferPool;
 use exsocks::relay::{DEFAULT_BUFFER_SIZE, relay};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
-
-/// 创建测试用的 BufferPool
-fn test_pool() -> Arc<BufferPool> {
-    Arc::new(BufferPool::new(16, DEFAULT_BUFFER_SIZE))
-}
 
 #[tokio::test]
 async fn test_relay_bidirectional() {
@@ -29,12 +21,11 @@ async fn test_relay_bidirectional() {
     let (mut client, _) = client_listener.accept().await.unwrap();
     let (mut target, _) = target_listener.accept().await.unwrap();
 
-    let pool = test_pool();
     let relay_handle = tokio::spawn(async move {
         relay(
             proxy_to_client,
             proxy_to_target,
-            &pool,
+            DEFAULT_BUFFER_SIZE,
             CancellationToken::new(),
         )
         .await
@@ -79,12 +70,11 @@ async fn test_relay_large_data() {
     let (mut client, _) = client_listener.accept().await.unwrap();
     let (mut target, _) = target_listener.accept().await.unwrap();
 
-    let pool = test_pool();
     let relay_handle = tokio::spawn(async move {
         relay(
             proxy_to_client,
             proxy_to_target,
-            &pool,
+            DEFAULT_BUFFER_SIZE,
             CancellationToken::new(),
         )
         .await
@@ -126,12 +116,11 @@ async fn test_relay_client_close() {
     let (client, _) = client_listener.accept().await.unwrap();
     let (mut target, _) = target_listener.accept().await.unwrap();
 
-    let pool = test_pool();
     let relay_handle = tokio::spawn(async move {
         relay(
             proxy_to_client,
             proxy_to_target,
-            &pool,
+            DEFAULT_BUFFER_SIZE,
             CancellationToken::new(),
         )
         .await
@@ -162,12 +151,11 @@ async fn test_relay_empty_transfer() {
     let (client, _) = client_listener.accept().await.unwrap();
     let (target, _) = target_listener.accept().await.unwrap();
 
-    let pool = test_pool();
     let relay_handle = tokio::spawn(async move {
         relay(
             proxy_to_client,
             proxy_to_target,
-            &pool,
+            DEFAULT_BUFFER_SIZE,
             CancellationToken::new(),
         )
         .await
@@ -197,12 +185,11 @@ async fn test_relay_target_close() {
     let (mut client, _) = client_listener.accept().await.unwrap();
     let (target, _) = target_listener.accept().await.unwrap();
 
-    let pool = test_pool();
     let relay_handle = tokio::spawn(async move {
         relay(
             proxy_to_client,
             proxy_to_target,
-            &pool,
+            DEFAULT_BUFFER_SIZE,
             CancellationToken::new(),
         )
         .await
@@ -233,12 +220,11 @@ async fn test_relay_byte_count() {
     let (mut client, _) = client_listener.accept().await.unwrap();
     let (mut target, _) = target_listener.accept().await.unwrap();
 
-    let pool = test_pool();
     let relay_handle = tokio::spawn(async move {
         relay(
             proxy_to_client,
             proxy_to_target,
-            &pool,
+            DEFAULT_BUFFER_SIZE,
             CancellationToken::new(),
         )
         .await
@@ -301,12 +287,11 @@ async fn test_relay_concurrent_connections() {
             let (mut client, _) = client_listener.accept().await.unwrap();
             let (mut target, _) = target_listener.accept().await.unwrap();
 
-            let pool = test_pool();
             let relay_handle = tokio::spawn(async move {
                 relay(
                     proxy_to_client,
                     proxy_to_target,
-                    &pool,
+                    DEFAULT_BUFFER_SIZE,
                     CancellationToken::new(),
                 )
                 .await
@@ -383,11 +368,9 @@ async fn test_relay_cancellation_on_unresponsive_peer() {
     let cancel_token = CancellationToken::new();
     let cancel_clone = cancel_token.clone();
 
-    let pool = test_pool();
-    let relay_handle =
-        tokio::spawn(
-            async move { relay(proxy_to_client, proxy_to_target, &pool, cancel_clone).await },
-        );
+    let relay_handle = tokio::spawn(async move {
+        relay(proxy_to_client, proxy_to_target, DEFAULT_BUFFER_SIZE, cancel_clone).await
+    });
 
     // 模拟对端不响应，等待 50ms 后触发取消
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -433,11 +416,9 @@ async fn test_relay_cancellation_during_transfer() {
     let cancel_token = CancellationToken::new();
     let cancel_clone = cancel_token.clone();
 
-    let pool = test_pool();
-    let relay_handle =
-        tokio::spawn(
-            async move { relay(proxy_to_client, proxy_to_target, &pool, cancel_clone).await },
-        );
+    let relay_handle = tokio::spawn(async move {
+        relay(proxy_to_client, proxy_to_target, DEFAULT_BUFFER_SIZE, cancel_clone).await
+    });
 
     // 发送一些数据
     let data = b"some data before cancel";

@@ -101,9 +101,6 @@ log_max_size: 104857600  # 100MB
 # Relay buffer size (bytes), default 64KB
 relay_buffer_size: 65536
 
-# Buffer pool capacity, 0 = default 2048
-relay_pool_capacity: 0
-
 # DNS cache
 dns_cache_ttl: 300            # Positive cache TTL (seconds)
 dns_cache_max_entries: 1024   # Max cache entries
@@ -163,7 +160,6 @@ src/
 │   ├── request.rs    # CONNECT request parsing
 │   └── reply.rs      # Response building
 ├── relay.rs          # Async bidirectional data relay (configurable buffers)
-├── buffer_pool.rs    # Lock-free buffer object pool (crossbeam ArrayQueue)
 ├── dns_cache.rs      # DNS resolution cache (positive + negative caching)
 ├── auth.rs           # User credential store with hot-reload (ArcSwap + notify)
 ├── access.rs         # Source IP whitelist with hot-reload

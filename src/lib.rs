@@ -1,6 +1,5 @@
 pub mod access;
 pub mod auth;
-pub mod buffer_pool;
 pub mod config;
 pub mod dns_cache;
 pub mod error;

@@ -11,7 +11,6 @@ use tracing::{debug, error, info, info_span, warn};
 
 use crate::access::AccessControl;
 use crate::auth::UserStore;
-use crate::buffer_pool::BufferPool;
 use crate::config::AppConfig;
 use crate::dns_cache::DnsCache;
 use crate::error::SocksError;
@@ -37,13 +36,7 @@ pub async fn run_with_listener(
 
     let connect_timeout = Duration::from_secs(config.connect_timeout);
     let relay_buffer_size = config.relay_buffer_size;
-    let pool_capacity = config.effective_pool_capacity();
-    let buffer_pool = Arc::new(BufferPool::new(pool_capacity, relay_buffer_size));
-    info!(
-        capacity = pool_capacity,
-        buffer_size = relay_buffer_size,
-        "Buffer pool initialized"
-    );
+    info!(buffer_size = relay_buffer_size, "Relay buffer configured");
     let cancel_token = external_token.unwrap_or_default();
     let dns_cache = if config.dns_cache_ttl > 0 {
         let cache = Arc::new(DnsCache::new(
@@ -162,13 +155,12 @@ pub async fn run_with_listener(
                 }
 
                 let dns_cache = dns_cache.clone();
-                let pool = buffer_pool.clone();
                 let user_store = user_store.clone();
                 let trc = target_rule_control.clone();
                 let token = cancel_token.child_token();
 
                 tokio::spawn(async move {
-                    let result = handle_connection(socket, peer_addr, connect_timeout, pool, dns_cache, user_store, trc, token).await;
+                    let result = handle_connection(socket, peer_addr, connect_timeout, relay_buffer_size, dns_cache, user_store, trc, token).await;
                     if let Err(e) = result {
                         error!(error = %e, "Connection error");
                     }
@@ -194,7 +186,7 @@ async fn handle_connection(
     mut socket: TcpStream,
     _peer_addr: SocketAddr,
     connect_timeout: Duration,
-    pool: Arc<BufferPool>,
+    relay_buffer_size: usize,
     dns_cache: Option<Arc<DnsCache>>,
     user_store: Option<Arc<UserStore>>,
     target_rule_control: Option<Arc<TargetRuleControl>>,
@@ -247,7 +239,7 @@ async fn handle_connection(
     socks5::send_reply(&mut socket, REP_SUCCEEDED, bind_addr).await?;
     info!(target = %request.address, port = request.port, "Established");
 
-    let (client_to_target, target_to_client) = relay::relay(socket, target, &pool, cancel).await?;
+    let (client_to_target, target_to_client) = relay::relay(socket, target, relay_buffer_size, cancel).await?;
     info!(
         bytes_up = client_to_target,
         bytes_down = target_to_client,
