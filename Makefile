@@ -21,15 +21,15 @@ UNAME_M := $(shell uname -m)
 
 ifeq ($(UNAME_S),Darwin)
   ifeq ($(UNAME_M),arm64)
-    DEFAULT_TARGET := aarch64-darwin
+    DEFAULT_TARGET := aarch64-apple-darwin
   else
-    DEFAULT_TARGET := x86_64-darwin
+    DEFAULT_TARGET := x86_64-apple-darwin
   endif
 else
   ifeq ($(UNAME_M),aarch64)
-    DEFAULT_TARGET := aarch64-linux
+    DEFAULT_TARGET := aarch64-unknown-linux-gnu
   else
-    DEFAULT_TARGET := x86_64-linux
+    DEFAULT_TARGET := x86_64-unknown-linux-gnu
   endif
 endif
 
@@ -128,15 +128,17 @@ build-release: ## 生产优化构建
 		cargo build --release --target $(TARGET)
 	@echo "$(GREEN)✓ 构建完成: $(RELEASE_DIR)/$(APP_NAME)$(NC)"
 
-.PHONY: strip
-strip: build-release ## 剥离符号表
-	@echo "$(BLUE)=== 剥离符号表 ===$(NC)"
-ifeq ($(UNAME_S),Darwin)
-	strip $(RELEASE_DIR)/$(APP_NAME)
-else
-	strip --strip-unneeded $(RELEASE_DIR)/$(APP_NAME)
-endif
-	ls -lh $(RELEASE_DIR)/$(APP_NAME)
+.PHONY: build-docker
+build-docker: ## 构建 Docker 镜像
+	@echo "$(BLUE)=== Docker 构建 ===$(NC)"
+	docker build \
+		--build-arg APP_VERSION=$(APP_VERSION) \
+		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
+		--build-arg BUILD_TIME=$(BUILD_TIME) \
+		-t $(DOCKER_IMAGE):$(DOCKER_TAG) \
+		-t $(DOCKER_IMAGE):latest \
+		.
+	@echo "$(GREEN)✓ 镜像: $(DOCKER_IMAGE):$(DOCKER_TAG)$(NC)"
 
 # -----------------------------------------------------------------------------
 # 测试
@@ -171,35 +173,6 @@ coverage: ## 生成测试覆盖率报告（需安装 cargo-tarpaulin，仅 Linux
 	@echo "$(BLUE)=== 覆盖率测试 ===$(NC)"
 	cargo tarpaulin --out Html --out Xml --output-dir $(BUILD_DIR)/coverage
 	@echo "$(GREEN)✓ 报告: $(BUILD_DIR)/coverage/tarpaulin-report.html$(NC)"
-
-# -----------------------------------------------------------------------------
-# Docker
-# -----------------------------------------------------------------------------
-
-.PHONY: docker-build
-docker-build: ## 构建 Docker 镜像
-	@echo "$(BLUE)=== Docker 构建 ===$(NC)"
-	docker build \
-		--build-arg APP_VERSION=$(APP_VERSION) \
-		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
-		--build-arg BUILD_TIME=$(BUILD_TIME) \
-		-t $(DOCKER_IMAGE):$(DOCKER_TAG) \
-		-t $(DOCKER_IMAGE):latest \
-		.
-	@echo "$(GREEN)✓ 镜像: $(DOCKER_IMAGE):$(DOCKER_TAG)$(NC)"
-
-.PHONY: docker-push
-docker-push: docker-build ## 推送 Docker 镜像
-	@echo "$(BLUE)=== 推送镜像 ===$(NC)"
-	docker push $(DOCKER_IMAGE):$(DOCKER_TAG)
-	docker push $(DOCKER_IMAGE):latest
-
-.PHONY: docker-run
-docker-run: ## 本地运行 Docker 容器
-	docker run --rm -it \
-		-p 1080:1080 \
-		-v $(PWD)/$(EXAMPLE_DIR):/app/config:ro \
-		$(DOCKER_IMAGE):latest --config /app/config/server.yaml
 
 # -----------------------------------------------------------------------------
 # 清理
