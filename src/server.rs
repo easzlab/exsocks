@@ -15,7 +15,6 @@ use crate::buffer_pool::BufferPool;
 use crate::config::AppConfig;
 use crate::dns_cache::DnsCache;
 use crate::error::SocksError;
-use crate::limiter::ConnectionLimiter;
 use crate::relay;
 use crate::socks5;
 use crate::socks5::protocol::{REP_CONNECTION_NOT_ALLOWED, REP_SUCCEEDED};
@@ -36,7 +35,6 @@ pub async fn run_with_listener(
     let addr = listener.local_addr()?;
     info!("SOCKS5 server listening on {}", addr);
 
-    let limiter = Arc::new(ConnectionLimiter::new(config.max_connections));
     let connect_timeout = Duration::from_secs(config.connect_timeout);
     let relay_buffer_size = config.relay_buffer_size;
     let pool_capacity = config.effective_pool_capacity();
@@ -148,8 +146,6 @@ pub async fn run_with_listener(
         None
     };
 
-    info!("Max connections: {}", config.max_connections);
-
     loop {
         tokio::select! {
             result = listener.accept() => {
@@ -165,7 +161,6 @@ pub async fn run_with_listener(
                     continue;
                 }
 
-                let limiter = limiter.clone();
                 let dns_cache = dns_cache.clone();
                 let pool = buffer_pool.clone();
                 let user_store = user_store.clone();
@@ -173,7 +168,7 @@ pub async fn run_with_listener(
                 let token = cancel_token.child_token();
 
                 tokio::spawn(async move {
-                    let result = handle_connection(socket, peer_addr, limiter, connect_timeout, pool, dns_cache, user_store, trc, token).await;
+                    let result = handle_connection(socket, peer_addr, connect_timeout, pool, dns_cache, user_store, trc, token).await;
                     if let Err(e) = result {
                         error!(error = %e, "Connection error");
                     }
@@ -195,11 +190,9 @@ pub async fn run_with_listener(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn handle_connection(
     mut socket: TcpStream,
     _peer_addr: SocketAddr,
-    limiter: Arc<ConnectionLimiter>,
     connect_timeout: Duration,
     pool: Arc<BufferPool>,
     dns_cache: Option<Arc<DnsCache>>,
@@ -207,14 +200,6 @@ async fn handle_connection(
     target_rule_control: Option<Arc<TargetRuleControl>>,
     cancel: CancellationToken,
 ) -> Result<(), SocksError> {
-    let _permit = match limiter.acquire() {
-        Ok(permit) => permit,
-        Err(e) => {
-            debug!("Rejected: limit exceeded");
-            return Err(e);
-        }
-    };
-
     socks5::perform_handshake(&mut socket, user_store.as_ref().map(|s| s.as_ref())).await?;
 
     let request = socks5::parse_request(&mut socket).await?;

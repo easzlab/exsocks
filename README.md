@@ -12,7 +12,6 @@
 - **源地址白名单** — 基于 CIDR 规则的客户端 IP 访问控制，配置文件热加载
 - **DNS 缓存** — 内置 DNS 解析缓存（正缓存 + 负缓存），减少重复 DNS 查询
 - **缓冲区对象池** — 基于无锁 `ArrayQueue` 的缓冲区复用，降低高频短连接场景下的堆分配开销
-- **并发限流** — 基于 `Semaphore` 的 O(1) 无锁并发连接限制
 - **可配置缓冲区** — 转发缓冲区大小可调（16 KiB ~ 256 KiB），适配不同网络场景
 - **结构化日志** — 基于 `tracing`，支持按天滚动、文件大小滚动、最大保留天数
 - **多层配置** — 支持 YAML 配置文件 + 环境变量 + 命令行参数，优先级递增
@@ -66,7 +65,7 @@ make docker-run
 ### 命令行参数
 
 ```bash
-./exsocks --bind 0.0.0.0:1080 --max-connections 2048 --log-level debug
+./exsocks --bind 0.0.0.0:1080 --log-level debug
 ```
 
 ### 使用 curl 测试
@@ -82,16 +81,13 @@ exsocks 支持多层配置，优先级从低到高：
 1. **系统配置**：`~/.config/exsocks/server.yaml`
 2. **当前目录**：`./config/server.yaml`
 3. **命令行指定**：`--config <path>`
-4. **环境变量**：`EXSOCKS_*`（如 `EXSOCKS_BIND`、`EXSOCKS_MAX_CONNECTIONS`）
+4. **环境变量**：`EXSOCKS_*`（如 `EXSOCKS_BIND`）
 
 ### 完整配置示例
 
 ```yaml
 # 服务器监听地址
 bind: "0.0.0.0:1080"
-
-# 最大并发连接数
-max_connections: 2048
 
 # 连接目标超时时间（秒）
 connect_timeout: 10
@@ -105,7 +101,7 @@ log_max_size: 104857600  # 100MB
 # 转发缓冲区大小（字节），默认 64KB
 relay_buffer_size: 65536
 
-# 缓冲区对象池容量，0 = 自动（max_connections × 2）
+# 缓冲区对象池容量，0 = 使用默认值 2048
 relay_pool_capacity: 0
 
 # DNS 缓存配置
@@ -150,7 +146,7 @@ client_rules:
 ### 连接处理流程
 
 ```
-Accept → 白名单检查 → 限流检查 → SOCKS5 握手 → 认证 → 请求解析 → DNS 解析 → 连接目标 → 双向转发
+Accept → 白名单检查 → SOCKS5 握手 → 认证 → 请求解析 → DNS 解析 → 连接目标 → 双向转发
 ```
 
 ### 模块结构
@@ -171,7 +167,6 @@ src/
 ├── dns_cache.rs      # DNS 解析缓存（正缓存 + 负缓存）
 ├── auth.rs           # 用户认证存储与热加载（ArcSwap + notify）
 ├── access.rs         # 源地址白名单与热加载
-├── limiter.rs        # 基于 Semaphore 的并发连接限流器
 ├── error.rs          # 统一错误类型
 └── lib.rs            # 库入口
 ```
@@ -181,7 +176,6 @@ src/
 | 阶段 | 设计 | 说明 |
 |------|------|------|
 | **连接接受** | epoll/kqueue 事件驱动 | `tokio::spawn` 轻量异步 task |
-| **限流** | `Semaphore::try_acquire_owned` | O(1) CAS 原子操作，无锁 |
 | **握手/请求解析** | 栈上固定缓冲区 | 零堆分配，系统调用次数最小化 |
 | **DNS 解析** | `DashMap` 并发缓存 | 正/负缓存分离 TTL，惰性淘汰 |
 | **数据转发** | `BufReader` + `copy_buf` | 可配置缓冲区（默认 64 KiB），纯异步 |

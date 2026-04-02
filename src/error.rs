@@ -20,9 +20,6 @@ pub enum SocksError {
     #[error("Unsupported address type: 0x{0:02x}")]
     UnsupportedAddressType(u8),
 
-    #[error("Connection limit exceeded (max: {0})")]
-    ConnectionLimitExceeded(usize),
-
     #[error("Failed to connect to target: {0}")]
     ConnectFailed(String),
 
@@ -93,12 +90,6 @@ mod tests {
     fn test_error_display_unsupported_command() {
         let err = SocksError::UnsupportedCommand(0x02);
         assert!(err.to_string().contains("0x02"));
-    }
-
-    #[test]
-    fn test_error_display_connection_limit() {
-        let err = SocksError::ConnectionLimitExceeded(1024);
-        assert!(err.to_string().contains("max: 1024"));
     }
 
     #[test]

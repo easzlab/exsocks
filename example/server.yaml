@@ -4,7 +4,7 @@
 #   1. 系统配置: ~/.config/exsocks/server.yaml (Linux/macOS)
 #   2. 当前目录: ./config/server.yaml
 #   3. 命令行指定: --config <path>
-#   4. 环境变量: EXSOCKS_* (如 EXSOCKS_BIND, EXSOCKS_MAX_CONNECTIONS)
+#   4. 环境变量: EXSOCKS_* (如 EXSOCKS_BIND)
 #
 # 所有配置项都有默认值，可以只配置需要修改的项
 
@@ -13,20 +13,15 @@
 # 默认: 127.0.0.1:1080
 bind: "0.0.0.0:1080"
 
-# 最大并发连接数
-# 超过此限制的新连接将被拒绝
-# 默认: 1024
-max_connections: 2048
-
 # 连接目标的超时时间（秒）
 # 如果目标主机在此时间内未响应，连接将被中断
 # 默认: 10
-connect_timeout: 10
+connect_timeout: 5
 
 # 日志文件目录
 # 日志文件按天滚动，格式: exsocks.YYYY-MM-DD.log
 # 默认: ./logs
-log_dir: "/var/log/exsocks"
+log_dir: "./logs"
 
 # 日志级别
 # 可选值: trace, debug, info, warn, error
@@ -55,10 +50,9 @@ relay_buffer_size: 65536
 
 # 缓冲区对象池容量
 # relay 双向转发使用的 Vec<u8> 缓冲区对象池最大容量
-# 设置为 0 时自动使用 max_connections * 2
+# 默认值 2048
 # 池中缓冲区可被连接复用，减少高频短连接场景下的堆分配开销
-# 默认: 0（自动推导）
-relay_pool_capacity: 0
+relay_pool_capacity: 2048
 
 # DNS 缓存 TTL（秒）
 # 域名解析结果的缓存时间，避免高频域名的重复 DNS 查询

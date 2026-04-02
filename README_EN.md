@@ -12,7 +12,6 @@ English | [中文](README.md)
 - **Source IP Whitelist** — CIDR-based client IP access control with hot-reloadable configuration
 - **DNS Cache** — Built-in DNS resolution cache (positive + negative caching) to reduce redundant DNS queries
 - **Buffer Object Pool** — Lock-free buffer reuse based on `ArrayQueue`, reducing heap allocation overhead in high-frequency short-connection scenarios
-- **Concurrency Limiting** — O(1) lock-free concurrent connection limiting based on `Semaphore`
 - **Configurable Buffers** — Adjustable relay buffer size (16 KiB ~ 256 KiB) for different network scenarios
 - **Structured Logging** — Built on `tracing`, supports daily rotation, size-based rotation, and max file retention
 - **Layered Configuration** — YAML config files + environment variables + CLI arguments with ascending priority
@@ -66,7 +65,7 @@ make docker-run
 ### CLI Arguments
 
 ```bash
-./exsocks --bind 0.0.0.0:1080 --max-connections 2048 --log-level debug
+./exsocks --bind 0.0.0.0:1080 --log-level debug
 ```
 
 ### Test with curl
@@ -82,16 +81,13 @@ exsocks supports layered configuration with ascending priority:
 1. **System config**: `~/.config/exsocks/server.yaml`
 2. **Current directory**: `./config/server.yaml`
 3. **CLI specified**: `--config <path>`
-4. **Environment variables**: `EXSOCKS_*` (e.g., `EXSOCKS_BIND`, `EXSOCKS_MAX_CONNECTIONS`)
+4. **Environment variables**: `EXSOCKS_*` (e.g., `EXSOCKS_BIND`)
 
 ### Full Configuration Example
 
 ```yaml
 # Server listen address
 bind: "0.0.0.0:1080"
-
-# Max concurrent connections
-max_connections: 2048
 
 # Target connection timeout (seconds)
 connect_timeout: 10
@@ -105,7 +101,7 @@ log_max_size: 104857600  # 100MB
 # Relay buffer size (bytes), default 64KB
 relay_buffer_size: 65536
 
-# Buffer pool capacity, 0 = auto (max_connections × 2)
+# Buffer pool capacity, 0 = default 2048
 relay_pool_capacity: 0
 
 # DNS cache
@@ -150,7 +146,7 @@ client_rules:
 ### Connection Processing Pipeline
 
 ```
-Accept → Whitelist Check → Rate Limit → SOCKS5 Handshake → Auth → Request Parse → DNS Resolve → Connect Target → Bidirectional Relay
+Accept → Whitelist Check → SOCKS5 Handshake → Auth → Request Parse → DNS Resolve → Connect Target → Bidirectional Relay
 ```
 
 ### Module Structure
@@ -171,7 +167,6 @@ src/
 ├── dns_cache.rs      # DNS resolution cache (positive + negative caching)
 ├── auth.rs           # User credential store with hot-reload (ArcSwap + notify)
 ├── access.rs         # Source IP whitelist with hot-reload
-├── limiter.rs        # Semaphore-based concurrent connection limiter
 ├── error.rs          # Unified error types
 └── lib.rs            # Library entry
 ```
@@ -181,7 +176,6 @@ src/
 | Stage | Design | Details |
 |-------|--------|---------|
 | **Accept** | epoll/kqueue event-driven | Lightweight async tasks via `tokio::spawn` |
-| **Rate Limiting** | `Semaphore::try_acquire_owned` | O(1) CAS atomic operation, lock-free |
 | **Handshake/Parsing** | Stack-allocated fixed buffers | Zero heap allocation, minimal syscalls |
 | **DNS Resolution** | `DashMap` concurrent cache | Separate TTLs for positive/negative cache, lazy eviction |
 | **Data Relay** | `BufReader` + `copy_buf` | Configurable buffer (default 64 KiB), fully async |

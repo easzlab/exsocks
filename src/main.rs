@@ -30,10 +30,6 @@ struct Args {
     #[arg(short, long)]
     bind: Option<SocketAddr>,
 
-    /// Max concurrent connections
-    #[arg(short, long)]
-    max_connections: Option<usize>,
-
     /// Log directory
     #[arg(long)]
     log_dir: Option<PathBuf>,
@@ -90,7 +86,6 @@ async fn main() -> Result<(), SocksError> {
 
     config.apply_cli_args(
         args.bind,
-        args.max_connections,
         args.log_dir.clone(),
         args.log_level.clone(),
         None,

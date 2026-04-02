@@ -16,7 +16,6 @@ async fn start_proxy_server() -> (tokio::task::JoinHandle<()>, SocketAddr) {
 
     let mut config = AppConfig::default();
     config.bind = addr;
-    config.max_connections = 100;
     config.connect_timeout = 5;
 
     let handle = tokio::spawn(async move {
@@ -255,7 +254,6 @@ async fn test_e2e_invalid_socks_version() {
 #[tokio::test]
 async fn test_e2e_graceful_shutdown() {
     let config = AppConfig {
-        max_connections: 100,
         connect_timeout: 5,
         ..AppConfig::default()
     };
@@ -296,62 +294,6 @@ async fn test_e2e_graceful_shutdown() {
     // 服务器应该已优雅关闭
     let _ = tokio::time::timeout(std::time::Duration::from_secs(2), server_handle).await;
 
-    echo_handle.abort();
-}
-
-#[tokio::test]
-async fn test_e2e_connection_limit() {
-    let config = AppConfig {
-        max_connections: 3,
-        connect_timeout: 5,
-        ..AppConfig::default()
-    };
-    let (server_handle, proxy_addr, cancel_token) = common::start_test_server(config).await;
-    let (echo_handle, echo_addr) = common::start_echo_server().await;
-
-    // 建立 3 个连接（达到限制）
-    let mut streams = Vec::new();
-    for _ in 0..3 {
-        let stream = common::socks5_connect(proxy_addr, echo_addr).await;
-        streams.push(stream);
-    }
-
-    // 第 4 个连接应该被拒绝
-    let mut stream4 = TcpStream::connect(proxy_addr).await.unwrap();
-    let handshake = common::build_handshake_request(&[AUTH_NO_AUTH]);
-    stream4.write_all(&handshake).await.unwrap();
-
-    // 应该收到连接关闭或错误
-    let mut buf = [0u8; 10];
-    let result = stream4.read(&mut buf).await;
-    match result {
-        Ok(0) => {}  // 连接被关闭 - 预期行为
-        Ok(_) => {}  // 可能收到拒绝响应
-        Err(_) => {} // IO 错误也可接受
-    }
-
-    // 释放一个连接后应该可以新建连接
-    drop(streams.pop());
-
-    // 等待服务端 relay 线程退出并释放 semaphore permit
-    // 在 Docker/Linux 环境下 splice 阻塞线程退出可能需要更长时间
-    let mut new_stream = None;
-    for attempt in 0..10 {
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        match try_socks5_connect(proxy_addr, echo_addr).await {
-            Ok(stream) => {
-                new_stream = Some(stream);
-                break;
-            }
-            Err(_) if attempt < 9 => continue,
-            Err(e) => panic!("Failed to establish new connection after retries: {}", e),
-        }
-    }
-    drop(new_stream);
-
-    drop(streams);
-    cancel_token.cancel();
-    let _ = server_handle.await;
     echo_handle.abort();
 }
 
@@ -440,7 +382,6 @@ async fn test_e2e_connect_domain() {
 async fn test_e2e_client_abort() {
     let (echo_handle, echo_addr) = common::start_echo_server().await;
     let config = AppConfig {
-        max_connections: 100,
         connect_timeout: 5,
         ..AppConfig::default()
     };
@@ -470,7 +411,6 @@ async fn test_e2e_client_abort() {
 #[tokio::test]
 async fn test_e2e_target_abort() {
     let config = AppConfig {
-        max_connections: 100,
         connect_timeout: 5,
         ..AppConfig::default()
     };
@@ -846,7 +786,6 @@ client_rules: []
 async fn test_e2e_access_control_disabled() {
     // access_enabled=false 时，不受规则影响，所有连接均可通过
     let config = AppConfig {
-        max_connections: 100,
         connect_timeout: 5,
         access_enabled: false,
         ..AppConfig::default()
