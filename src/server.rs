@@ -225,12 +225,14 @@ async fn handle_connection(
     {
         Ok(Ok(stream)) => stream,
         Ok(Err(e)) => {
-            error!(error = %e, "Failed to connect to target");
-            return Err(e);
+            return Err(SocksError::ConnectFailed(format!(
+                "{}:{} - {e}", request.address, request.port
+            )));
         }
         Err(_) => {
-            error!("Connect to target timed out");
-            return Err(SocksError::ConnectTimeout);
+            return Err(SocksError::ConnectFailed(format!(
+                "{}:{} - timed out", request.address, request.port
+            )));
         }
     };
     target.set_nodelay(true)?;
