@@ -5,7 +5,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use arc_swap::ArcSwap;
-use ipnet::IpNet;
+use ipnet::{IpNet, Ipv4Net, Ipv6Net};
+use prefix_trie::PrefixMap;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Deserialize;
 use tracing::{error, info, warn};
@@ -172,12 +173,6 @@ impl TrieNode {
     }
 }
 
-/// CIDR 规则条目（保持配置顺序）
-#[derive(Debug)]
-struct CidrEntry {
-    network: IpNet,
-    rule: PrioritizedRule,
-}
 
 // ===== 配置文件解析 =====
 
@@ -310,8 +305,11 @@ pub struct TargetRuleSet {
     domain_index: HashMap<String, Vec<PrioritizedRule>>,
     /// DOMAIN-SUFFIX 后缀匹配：倒序域名 Trie
     suffix_trie: TrieNode,
-    /// IPCIDR 规则列表，保持配置文件中的原始顺序（first-match-wins + early return）
-    cidr_rules: Vec<CidrEntry>,
+    /// IPCIDR IPv4 规则 Radix Trie：key 为 Ipv4Net，value 为 Vec<PrioritizedRule>
+    /// 查找时通过 cover_values 遍历所有匹配前缀，取 priority 最小的（first-match-wins）
+    cidr_trie_v4: PrefixMap<Ipv4Net, Vec<PrioritizedRule>>,
+    /// IPCIDR IPv6 规则 Radix Trie
+    cidr_trie_v6: PrefixMap<Ipv6Net, Vec<PrioritizedRule>>,
     /// 规则总数（用于日志/调试）
     total_rules: usize,
 }
@@ -322,7 +320,8 @@ impl TargetRuleSet {
         let total_rules = rules.len();
         let mut domain_index: HashMap<String, Vec<PrioritizedRule>> = HashMap::new();
         let mut suffix_trie = TrieNode::new();
-        let mut cidr_rules: Vec<CidrEntry> = Vec::new();
+        let mut cidr_trie_v4: PrefixMap<Ipv4Net, Vec<PrioritizedRule>> = PrefixMap::new();
+        let mut cidr_trie_v6: PrefixMap<Ipv6Net, Vec<PrioritizedRule>> = PrefixMap::new();
 
         for (priority, rule) in rules.into_iter().enumerate() {
             let pr = PrioritizedRule {
@@ -345,25 +344,29 @@ impl TargetRuleSet {
                     suffix_trie.insert(&labels, pr);
                 }
                 RuleType::IpCidr => {
-                    // IpNet 自动支持 IPv4 和 IPv6 CIDR
                     let network: IpNet = rule.value.parse().map_err(|e| {
                         SocksError::TargetRulesConfig(format!(
                             "Invalid CIDR '{}': {}",
                             rule.value, e
                         ))
                     })?;
-                    cidr_rules.push(CidrEntry { network, rule: pr });
+                    match network {
+                        IpNet::V4(v4net) => {
+                            cidr_trie_v4.entry(v4net).or_default().push(pr);
+                        }
+                        IpNet::V6(v6net) => {
+                            cidr_trie_v6.entry(v6net).or_default().push(pr);
+                        }
+                    }
                 }
             }
         }
 
-        // CIDR 规则保持配置文件中的原始顺序，不排序
-        // 匹配时按顺序遍历，first-match-wins + early return
-
         Ok(Self {
             domain_index,
             suffix_trie,
-            cidr_rules,
+            cidr_trie_v4,
+            cidr_trie_v6,
             total_rules,
         })
     }
@@ -416,20 +419,39 @@ impl TargetRuleSet {
         best
     }
 
-    /// CIDR 匹配：按配置顺序遍历，命中第一条即 early return
+    /// CIDR 匹配：使用 Radix Trie 的 cover_values 遍历所有匹配前缀，
+    /// 取 priority 最小且端口匹配的规则（first-match-wins 语义）。
     ///
-    /// 由于 IP 请求不会匹配 DOMAIN/DOMAIN-SUFFIX 规则，无需跨类型比较优先级，
-    /// cidr_rules 保持配置顺序，第一个匹配的就是优先级最高的，直接返回。
+    /// 复杂度 O(W)（W = 32 或 128），与规则数量无关。
     fn match_cidr(&self, ip: &IpAddr, port: u16) -> Option<&PrioritizedRule> {
         let normalized = normalize_ip(*ip);
 
-        for entry in &self.cidr_rules {
-            if entry.network.contains(&normalized) && entry.rule.port_matches(port) {
-                return Some(&entry.rule); // early return: first-match-wins
+        match normalized {
+            IpAddr::V4(v4) => {
+                let host_prefix = Ipv4Net::new(v4, 32).unwrap();
+                let mut best: Option<&PrioritizedRule> = None;
+                for rules in self.cidr_trie_v4.cover_values(&host_prefix) {
+                    for r in rules {
+                        if r.port_matches(port) && r.is_higher_priority_than(best) {
+                            best = Some(r);
+                        }
+                    }
+                }
+                best
+            }
+            IpAddr::V6(v6) => {
+                let host_prefix = Ipv6Net::new(v6, 128).unwrap();
+                let mut best: Option<&PrioritizedRule> = None;
+                for rules in self.cidr_trie_v6.cover_values(&host_prefix) {
+                    for r in rules {
+                        if r.port_matches(port) && r.is_higher_priority_than(best) {
+                            best = Some(r);
+                        }
+                    }
+                }
+                best
             }
         }
-
-        None
     }
 
     /// 返回规则总数
@@ -1091,5 +1113,102 @@ mod tests {
         ];
         let rs = TargetRuleSet::compile(rules).unwrap();
         assert_eq!(rs.rule_count(), 3);
+    }
+
+    // ===== Radix Trie 优化验证测试 =====
+
+    #[test]
+    fn test_ipcidr_first_match_wins_with_trie() {
+        // 宽范围 PASS（priority=0）+ 窄范围 BLOCK（priority=1）
+        // first-match-wins：宽范围优先级更高，应该 PASS
+        let rules = vec![
+            make_rule(RuleType::IpCidr, "10.0.0.0/8", 0, 65535, RuleAction::Pass, 0, 0.0),
+            make_rule(RuleType::IpCidr, "10.1.0.0/16", 0, 65535, RuleAction::Block, 0, 0.0),
+        ];
+        let rs = TargetRuleSet::compile(rules).unwrap();
+
+        // 10.1.2.3 同时匹配 10.0.0.0/8 和 10.1.0.0/16
+        // 应该取 priority=0 的 PASS（宽范围，配置在前）
+        let result = rs.check(&Address::IPv4(Ipv4Addr::new(10, 1, 2, 3)), 80);
+        assert!(result.allowed);
+
+        // 反向验证：窄范围 PASS（priority=0）+ 宽范围 BLOCK（priority=1）
+        let rules2 = vec![
+            make_rule(RuleType::IpCidr, "10.1.0.0/16", 0, 65535, RuleAction::Pass, 0, 0.0),
+            make_rule(RuleType::IpCidr, "10.0.0.0/8", 0, 65535, RuleAction::Block, 0, 0.0),
+        ];
+        let rs2 = TargetRuleSet::compile(rules2).unwrap();
+
+        // 10.1.2.3 同时匹配两条，应该取 priority=0 的 PASS（窄范围，配置在前）
+        let result = rs2.check(&Address::IPv4(Ipv4Addr::new(10, 1, 2, 3)), 80);
+        assert!(result.allowed);
+
+        // 10.2.0.1 只匹配 10.0.0.0/8（BLOCK），不匹配 10.1.0.0/16
+        let result = rs2.check(&Address::IPv4(Ipv4Addr::new(10, 2, 0, 1)), 80);
+        assert!(!result.allowed);
+    }
+
+    #[test]
+    fn test_ipcidr_same_cidr_different_ports() {
+        // 同一 CIDR 配置不同端口范围
+        let rules = vec![
+            make_rule(RuleType::IpCidr, "10.0.0.0/8", 80, 80, RuleAction::Pass, 0, 0.0),
+            make_rule(RuleType::IpCidr, "10.0.0.0/8", 443, 443, RuleAction::Pass, 0, 0.0),
+            make_rule(RuleType::IpCidr, "0.0.0.0/0", 0, 65535, RuleAction::Block, 0, 0.0),
+        ];
+        let rs = TargetRuleSet::compile(rules).unwrap();
+
+        // 端口 80 匹配第一条 PASS
+        let result = rs.check(&Address::IPv4(Ipv4Addr::new(10, 1, 2, 3)), 80);
+        assert!(result.allowed);
+
+        // 端口 443 匹配第二条 PASS
+        let result = rs.check(&Address::IPv4(Ipv4Addr::new(10, 1, 2, 3)), 443);
+        assert!(result.allowed);
+
+        // 端口 8080 不匹配 10.0.0.0/8 的任何端口规则，匹配 0.0.0.0/0 BLOCK
+        let result = rs.check(&Address::IPv4(Ipv4Addr::new(10, 1, 2, 3)), 8080);
+        assert!(!result.allowed);
+
+        // 非 10.x.x.x 地址，任何端口都匹配 0.0.0.0/0 BLOCK
+        let result = rs.check(&Address::IPv4(Ipv4Addr::new(192, 168, 1, 1)), 80);
+        assert!(!result.allowed);
+    }
+
+    #[test]
+    fn test_ipcidr_many_rules_performance() {
+        // 大量规则（500 条）下的正确性验证
+        // 生成 500 条 /24 CIDR 规则：10.0.0.0/24, 10.0.1.0/24, ..., 10.1.243.0/24
+        // 前 499 条 BLOCK，最后一条 PASS（10.1.243.0/24）
+        let mut rules: Vec<TargetRule> = Vec::with_capacity(500);
+        for i in 0..500u32 {
+            let second = ((i >> 8) & 0xFF) as u8; // 0 or 1
+            let third = (i & 0xFF) as u8;
+            let cidr = format!("10.{}.{}.0/24", second, third);
+            let action = if i == 499 {
+                RuleAction::Pass
+            } else {
+                RuleAction::Block
+            };
+            rules.push(make_rule(RuleType::IpCidr, &cidr, 0, 65535, action, 0, 0.0));
+        }
+        let rs = TargetRuleSet::compile(rules).unwrap();
+        assert_eq!(rs.rule_count(), 500);
+
+        // 10.0.0.1 匹配第一条 10.0.0.0/24（priority=0, BLOCK）
+        let result = rs.check(&Address::IPv4(Ipv4Addr::new(10, 0, 0, 1)), 80);
+        assert!(!result.allowed);
+
+        // 10.0.100.1 匹配 10.0.100.0/24（priority=100, BLOCK）
+        let result = rs.check(&Address::IPv4(Ipv4Addr::new(10, 0, 100, 1)), 80);
+        assert!(!result.allowed);
+
+        // 10.1.243.1 匹配最后一条 10.1.243.0/24（priority=499, PASS）
+        let result = rs.check(&Address::IPv4(Ipv4Addr::new(10, 1, 243, 1)), 80);
+        assert!(result.allowed);
+
+        // 192.168.1.1 不匹配任何规则，默认 BLOCK
+        let result = rs.check(&Address::IPv4(Ipv4Addr::new(192, 168, 1, 1)), 80);
+        assert!(!result.allowed);
     }
 }
