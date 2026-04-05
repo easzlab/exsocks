@@ -263,18 +263,22 @@ fn parse_rule_array(arr: &[serde_yaml::Value], index: usize) -> Result<TargetRul
         }
     };
 
-    // opt1: 8 位二进制字符串，默认 "00000000"
+    // opt1: 0-255 整数（位标志），默认 0
     let opt_flags = if arr.len() > 5 {
-        let opt1_str = arr[5].as_str().unwrap_or("00000000");
-        u8::from_str_radix(opt1_str, 2).map_err(|e| {
+        let opt1_val = arr[5].as_u64().ok_or_else(|| {
             SocksError::TargetRulesConfig(format!(
-                "Rule #{}: invalid opt1 '{}': expected 8-bit binary string (e.g. \"00000001\"), \
-                 error: {}",
-                index + 1,
-                opt1_str,
-                e
+                "Rule #{}: invalid opt1: expected integer 0-255",
+                index + 1
             ))
-        })?
+        })?;
+        if opt1_val > 255 {
+            return Err(SocksError::TargetRulesConfig(format!(
+                "Rule #{}: invalid opt1 '{}': expected integer 0-255",
+                index + 1,
+                opt1_val
+            )));
+        }
+        opt1_val as u8
     } else {
         0
     };
@@ -668,7 +672,7 @@ mod tests {
             0u64.into(),
             65535u64.into(),
             "PASS".into(),
-            "00000001".into(),
+            1u64.into(),
             serde_yaml::Value::Number(serde_yaml::Number::from(1.5)),
         ];
         let rule = parse_rule_array(&arr, 0).unwrap();
@@ -677,7 +681,7 @@ mod tests {
         assert_eq!(rule.port_start, 0);
         assert_eq!(rule.port_end, 65535);
         assert_eq!(rule.action, RuleAction::Pass);
-        assert_eq!(rule.opt_flags, 0b0000_0001);
+        assert_eq!(rule.opt_flags, 1);
         assert!((rule.opt_value - 1.5).abs() < f64::EPSILON);
     }
 
@@ -708,11 +712,11 @@ mod tests {
             0u64.into(),
             65535u64.into(),
             "BLOCK".into(),
-            "00000011".into(),
+            3u64.into(),
         ];
         let rule = parse_rule_array(&arr, 0).unwrap();
         assert_eq!(rule.rule_type, RuleType::IpCidr);
-        assert_eq!(rule.opt_flags, 0b0000_0011);
+        assert_eq!(rule.opt_flags, 3);
         assert!((rule.opt_value - 0.0).abs() < f64::EPSILON);
     }
 
@@ -737,7 +741,7 @@ mod tests {
             0u64.into(),
             65535u64.into(),
             "PASS".into(),
-            "00000000".into(),
+            0u64.into(),
             serde_yaml::Value::Number(serde_yaml::Number::from(0.0)),
             "extra".into(),
         ];
@@ -775,14 +779,29 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_invalid_opt1() {
+    fn test_parse_invalid_opt1_not_integer() {
         let arr: Vec<serde_yaml::Value> = vec![
             "DOMAIN".into(),
             "example.com".into(),
             0u64.into(),
             65535u64.into(),
             "PASS".into(),
-            "not_binary".into(),
+            "not_a_number".into(),
+        ];
+        let result = parse_rule_array(&arr, 0);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("invalid opt1"));
+    }
+
+    #[test]
+    fn test_parse_invalid_opt1_out_of_range() {
+        let arr: Vec<serde_yaml::Value> = vec![
+            "DOMAIN".into(),
+            "example.com".into(),
+            0u64.into(),
+            65535u64.into(),
+            "PASS".into(),
+            256u64.into(),
         ];
         let result = parse_rule_array(&arr, 0);
         assert!(result.is_err());

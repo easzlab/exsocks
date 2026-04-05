@@ -3,10 +3,10 @@
 #
 # type: DOMAIN | DOMAIN-SUFFIX | IPCIDR
 # action: PASS | BLOCK
-# opt1: 8位二进制字符串（位标志），可省略，默认 "00000000"
-#   bit0 (00000001): 记录规则 action 日志
-#   bit1 (00000010): 限制最大并发数，opt2 为具体数值（预留）
-#   bit2 (00000100): 限制单连接最大带宽，opt2 为具体数值（预留）
+# opt1: 0-255 整数（位标志），可省略，默认 0
+#   bit0 (1): 记录规则 action 日志
+#   bit1 (2): 限制最大并发数，opt2 为具体数值（预留）
+#   bit2 (4): 限制单连接最大带宽，opt2 为具体数值（预留）
 # opt2: 浮点数，含义由 opt1 决定，可省略，默认 0
 #
 # 规则按从上到下顺序匹配，命中第一条即停止（first-match-wins）
@@ -14,13 +14,13 @@
 
 target_rules:
   # 允许访问 baidu.com 及其所有子域名，记录日志
-  - [DOMAIN-SUFFIX, baidu.com, 0, 65535, PASS, "00000001", 0]
+  - [DOMAIN-SUFFIX, baidu.com, 0, 65535, PASS, 1, 0]
 
   # 允许访问 example.com 精确域名的 HTTPS 端口
   - [DOMAIN, example.com, 443, 443, PASS]
 
   # 允许访问本地回环地址（IPv4），记录日志
-  - [IPCIDR, 127.0.0.1/32, 0, 65535, PASS, "00000001", 0]
+  - [IPCIDR, 127.0.0.1/32, 0, 65535, PASS, 1, 0]
 
   # 允许访问内网 10.0.0.0/8 网段
   - [IPCIDR, 10.0.0.0/8, 0, 65535, PASS]
@@ -32,7 +32,7 @@ target_rules:
   - [IPCIDR, "fd00::/8", 0, 65535, PASS]
 
   # 阻止所有其他 IPv4，记录日志
-  - [IPCIDR, 0.0.0.0/0, 0, 65535, BLOCK, "00000001", 0]
+  - [IPCIDR, 0.0.0.0/0, 0, 65535, BLOCK, 1, 0]
 
   # 阻止所有其他 IPv6，记录日志
-  - [IPCIDR, "::/0", 0, 65535, BLOCK, "00000001", 0]
+  - [IPCIDR, "::/0", 0, 65535, BLOCK, 1, 0]

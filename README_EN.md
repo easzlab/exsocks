@@ -10,8 +10,8 @@ English | [中文](README.md)
 - **SOCKS5 Protocol** — Full implementation of [RFC 1928](docs/protocol/RFC1928.txt) CONNECT command, supporting IPv4 / IPv6 / domain name address types
 - **User Authentication** — [RFC 1929](docs/protocol/RFC1929.txt) username/password authentication with hot-reloadable credential files
 - **Source IP Whitelist** — CIDR-based client IP access control with hot-reloadable configuration
+- **Target Address Rules** — Supports PASS/BLOCK control via DOMAIN/DOMAIN-SUFFIX/IP-CIDR rules with priority-based matching; domain suffix matching optimized with reverse Trie, IP-CIDR matching optimized with Radix Trie
 - **DNS Cache** — Built-in DNS resolution cache (positive + negative caching) to reduce redundant DNS queries
-- **Buffer Object Pool** — Lock-free buffer reuse based on `ArrayQueue`, reducing heap allocation overhead in high-frequency short-connection scenarios
 - **Configurable Buffers** — Adjustable relay buffer size (16 KiB ~ 256 KiB) for different network scenarios
 - **Structured Logging** — Built on `tracing`, supports daily rotation, size-based rotation, and max file retention
 - **Layered Configuration** — YAML config files + environment variables + CLI arguments with ascending priority
@@ -175,7 +175,6 @@ src/
 | **Handshake/Parsing** | Stack-allocated fixed buffers | Zero heap allocation, minimal syscalls |
 | **DNS Resolution** | `DashMap` concurrent cache | Separate TTLs for positive/negative cache, lazy eviction |
 | **Data Relay** | `BufReader` + `copy_buf` | Configurable buffer (default 64 KiB), fully async |
-| **Buffer Management** | Lock-free object pool | `ArrayQueue` single CAS, no contention under high concurrency |
 | **Auth/Whitelist** | `ArcSwap` lock-free reads | Atomic swap on hot-reload, zero overhead on read path |
 
 ## 🧪 Testing

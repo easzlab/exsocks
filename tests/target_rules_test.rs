@@ -44,7 +44,7 @@ fn create_temp_yaml(content: &str) -> tempfile::NamedTempFile {
 fn test_yaml_7_element_rules() {
     let yaml = r#"
 target_rules:
-  - [DOMAIN-SUFFIX, baidu.com, 0, 65535, PASS, "00000001", 1.5]
+  - [DOMAIN-SUFFIX, baidu.com, 0, 65535, PASS, 1, 1.5]
 "#;
     let f = create_temp_yaml(yaml);
     let trc = TargetRuleControl::load(f.path()).unwrap();
@@ -69,7 +69,7 @@ target_rules:
 
     let result = rules.check(&Address::Domain("example.com".to_string()), 443);
     assert!(result.allowed);
-    assert!(!result.log); // opt1 默认 "00000000"
+    assert!(!result.log); // opt1 默认 0
     assert_eq!(result.opt_flags, 0);
 }
 
@@ -77,7 +77,7 @@ target_rules:
 fn test_yaml_6_element_rules() {
     let yaml = r#"
 target_rules:
-  - [IPCIDR, 10.0.0.0/8, 0, 65535, PASS, "00000011"]
+  - [IPCIDR, 10.0.0.0/8, 0, 65535, PASS, 3]
 "#;
     let f = create_temp_yaml(yaml);
     let trc = TargetRuleControl::load(f.path()).unwrap();
@@ -107,7 +107,7 @@ target_rules:
 fn test_yaml_invalid_too_many_elements() {
     let yaml = r#"
 target_rules:
-  - [DOMAIN, example.com, 0, 65535, PASS, "00000000", 0, extra]
+  - [DOMAIN, example.com, 0, 65535, PASS, 0, 0, extra]
 "#;
     let f = create_temp_yaml(yaml);
     let result = TargetRuleControl::load(f.path());
@@ -146,7 +146,7 @@ target_rules:
 fn test_yaml_invalid_opt1() {
     let yaml = r#"
 target_rules:
-  - [DOMAIN, example.com, 0, 65535, PASS, "not_binary"]
+  - [DOMAIN, example.com, 0, 65535, PASS, "not_a_number"]
 "#;
     let f = create_temp_yaml(yaml);
     let result = TargetRuleControl::load(f.path());
@@ -687,7 +687,7 @@ fn test_performance_1000_rules() {
 fn test_load_valid_yaml() {
     let yaml = r#"
 target_rules:
-  - [DOMAIN-SUFFIX, baidu.com, 0, 65535, PASS, "00000001", 0]
+  - [DOMAIN-SUFFIX, baidu.com, 0, 65535, PASS, 1, 0]
   - [IPCIDR, 10.0.0.0/8, 0, 65535, PASS]
   - [IPCIDR, 0.0.0.0/0, 0, 65535, BLOCK]
 "#;

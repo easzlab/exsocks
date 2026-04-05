@@ -940,8 +940,8 @@ async fn test_e2e_target_rules_pass() {
     // 目标地址在 PASS 规则中，连接应该成功并能正常传输数据
     let target_rules_yaml = r#"
 target_rules:
-  - [IPCIDR, 127.0.0.0/8, 0, 65535, PASS, "00000001", 0]
-  - [IPCIDR, 0.0.0.0/0, 0, 65535, BLOCK, "00000001", 0]
+  - [IPCIDR, 127.0.0.0/8, 0, 65535, PASS, 1, 0]
+  - [IPCIDR, 0.0.0.0/0, 0, 65535, BLOCK, 1, 0]
 "#;
     let (rules_path, _temp) = common::create_temp_target_rules_config(target_rules_yaml);
     let (echo_handle, echo_addr) = common::start_echo_server().await;
@@ -1109,8 +1109,8 @@ async fn test_e2e_target_rules_domain_atyp_with_ip_string() {
     // 如果 ATYP=DOMAIN + IP 字符串没有被兼容转换，将走域名匹配 → 无匹配 → 默认 BLOCK
     let target_rules_yaml = r#"
 target_rules:
-  - [IPCIDR, 127.0.0.0/8, 0, 65535, PASS, "00000001", 0]
-  - [IPCIDR, 0.0.0.0/0, 0, 65535, BLOCK, "00000001", 0]
+  - [IPCIDR, 127.0.0.0/8, 0, 65535, PASS, 1, 0]
+  - [IPCIDR, 0.0.0.0/0, 0, 65535, BLOCK, 1, 0]
 "#;
     let (rules_path, _temp) = common::create_temp_target_rules_config(target_rules_yaml);
     let (echo_handle, echo_addr) = common::start_echo_server().await;
