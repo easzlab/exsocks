@@ -98,6 +98,80 @@ impl PrioritizedRule {
     }
 }
 
+/// 倒序域名 Trie 节点
+///
+/// 域名按 '.' 分割后倒序插入，例如：
+/// - "baidu.com" → ["com", "baidu"]
+/// - "test.com.cn" → ["cn", "com", "test"]
+///
+/// Trie 结构示例（规则: DOMAIN-SUFFIX baidu.com, DOMAIN-SUFFIX test.com.cn）：
+/// ```text
+/// Root
+///  ├─ "com"
+///  │   └─ "baidu" [suffix_rules: ...]
+///  └─ "cn"
+///      └─ "com"
+///          └─ "test" [suffix_rules: ...]
+/// ```
+#[derive(Debug)]
+struct TrieNode {
+    /// 子节点映射：label → child node
+    /// 使用 Box<str> 作为 key 减少内存开销（比 String 少 8 字节）
+    children: HashMap<Box<str>, TrieNode>,
+    /// 该节点上的 DOMAIN-SUFFIX 规则（如果有）
+    suffix_rules: Vec<PrioritizedRule>,
+}
+
+impl TrieNode {
+    fn new() -> Self {
+        Self {
+            children: HashMap::new(),
+            suffix_rules: Vec::new(),
+        }
+    }
+
+    /// 插入一条后缀规则
+    /// labels 为域名按 '.' 分割后的倒序切片
+    fn insert(&mut self, labels: &[&str], rule: PrioritizedRule) {
+        let mut node = self;
+        for &label in labels {
+            node = node
+                .children
+                .entry(label.into())
+                .or_insert_with(TrieNode::new);
+        }
+        node.suffix_rules.push(rule);
+    }
+
+    /// 查找域名的所有匹配后缀规则，返回优先级最高的
+    /// labels 为待查询域名按 '.' 分割后的倒序切片
+    fn find_best_match<'a>(
+        &'a self,
+        labels: &[&str],
+        port: u16,
+        mut best: Option<&'a PrioritizedRule>,
+    ) -> Option<&'a PrioritizedRule> {
+        let mut node = self;
+
+        for &label in labels {
+            match node.children.get(label) {
+                Some(child) => {
+                    node = child;
+                    // 检查到达的节点是否有后缀规则
+                    for r in &node.suffix_rules {
+                        if r.port_matches(port) && r.is_higher_priority_than(best) {
+                            best = Some(r);
+                        }
+                    }
+                }
+                None => break, // 提前终止：路径不存在
+            }
+        }
+
+        best
+    }
+}
+
 /// CIDR 规则条目（保持配置顺序）
 #[derive(Debug)]
 struct CidrEntry {
@@ -234,8 +308,8 @@ fn parse_rule_array(arr: &[serde_yaml::Value], index: usize) -> Result<TargetRul
 pub struct TargetRuleSet {
     /// DOMAIN 精确匹配索引：key 为小写域名
     domain_index: HashMap<String, Vec<PrioritizedRule>>,
-    /// DOMAIN-SUFFIX 后缀匹配索引：key 为小写后缀
-    suffix_index: HashMap<String, Vec<PrioritizedRule>>,
+    /// DOMAIN-SUFFIX 后缀匹配：倒序域名 Trie
+    suffix_trie: TrieNode,
     /// IPCIDR 规则列表，保持配置文件中的原始顺序（first-match-wins + early return）
     cidr_rules: Vec<CidrEntry>,
     /// 规则总数（用于日志/调试）
@@ -247,7 +321,7 @@ impl TargetRuleSet {
     pub fn compile(rules: Vec<TargetRule>) -> Result<Self, SocksError> {
         let total_rules = rules.len();
         let mut domain_index: HashMap<String, Vec<PrioritizedRule>> = HashMap::new();
-        let mut suffix_index: HashMap<String, Vec<PrioritizedRule>> = HashMap::new();
+        let mut suffix_trie = TrieNode::new();
         let mut cidr_rules: Vec<CidrEntry> = Vec::new();
 
         for (priority, rule) in rules.into_iter().enumerate() {
@@ -266,8 +340,9 @@ impl TargetRuleSet {
                     domain_index.entry(key).or_default().push(pr);
                 }
                 RuleType::DomainSuffix => {
-                    let key = rule.value.to_ascii_lowercase();
-                    suffix_index.entry(key).or_default().push(pr);
+                    let lower = rule.value.to_ascii_lowercase();
+                    let labels: Vec<&str> = lower.split('.').rev().collect();
+                    suffix_trie.insert(&labels, pr);
                 }
                 RuleType::IpCidr => {
                     // IpNet 自动支持 IPv4 和 IPv6 CIDR
@@ -287,7 +362,7 @@ impl TargetRuleSet {
 
         Ok(Self {
             domain_index,
-            suffix_index,
+            suffix_trie,
             cidr_rules,
             total_rules,
         })
@@ -318,7 +393,7 @@ impl TargetRuleSet {
         }
     }
 
-    /// 域名匹配：查询 domain_index 和 suffix_index，取全局优先级最高的
+    /// 域名匹配：查询 domain_index 和 suffix_trie，取全局优先级最高的
     fn match_domain(&self, domain: &str, port: u16) -> Option<&PrioritizedRule> {
         let lower = domain.to_ascii_lowercase();
         let mut best: Option<&PrioritizedRule> = None;
@@ -332,22 +407,11 @@ impl TargetRuleSet {
             }
         }
 
-        // 2. 后缀匹配：逐级拆分域名（O(L)，L=域名层级数）
-        //    对于 "a.b.c.com"，依次查找 "a.b.c.com", "b.c.com", "c.com", "com"
-        let mut search = lower.as_str();
-        loop {
-            if let Some(rules) = self.suffix_index.get(search) {
-                for r in rules {
-                    if r.port_matches(port) && r.is_higher_priority_than(best) {
-                        best = Some(r);
-                    }
-                }
-            }
-            match search.find('.') {
-                Some(pos) => search = &search[pos + 1..],
-                None => break,
-            }
-        }
+        // 2. 后缀匹配：倒序 Trie 一次遍历
+        //    对于 "api.test.com.cn"，倒序为 ["cn", "com", "test", "api"]
+        //    沿 Trie 路径遍历，每个节点只 hash 一个短 label
+        let labels: Vec<&str> = lower.split('.').rev().collect();
+        best = self.suffix_trie.find_best_match(&labels, port, best);
 
         best
     }

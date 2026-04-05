@@ -989,3 +989,135 @@ target_rules:
         .check(&Address::IPv4(Ipv4Addr::new(127, 0, 0, 1)), 80)
         .allowed);
 }
+
+// ===== 倒序 Trie 特有行为测试 =====
+
+#[test]
+fn test_suffix_deep_nesting() {
+    // 测试深层嵌套域名的后缀匹配
+    let rules = vec![make_rule(
+        RuleType::DomainSuffix,
+        "com.cn",
+        0,
+        65535,
+        RuleAction::Pass,
+        0,
+        0.0,
+    )];
+    let rs = TargetRuleSet::compile(rules).unwrap();
+
+    // 多级子域名匹配
+    assert!(rs
+        .check(&Address::Domain("api.test.com.cn".to_string()), 80)
+        .allowed);
+    assert!(rs
+        .check(&Address::Domain("a.b.c.d.com.cn".to_string()), 80)
+        .allowed);
+    // 精确匹配自身
+    assert!(rs
+        .check(&Address::Domain("com.cn".to_string()), 80)
+        .allowed);
+    // 不误匹配
+    assert!(!rs
+        .check(&Address::Domain("com.net".to_string()), 80)
+        .allowed);
+    assert!(!rs
+        .check(&Address::Domain("notcom.cn".to_string()), 80)
+        .allowed);
+}
+
+#[test]
+fn test_suffix_multiple_rules_same_branch() {
+    // 同一 Trie 分支上有多条规则，验证优先级正确
+    let rules = vec![
+        make_rule(
+            RuleType::DomainSuffix,
+            "com.cn",
+            0,
+            65535,
+            RuleAction::Block,
+            0,
+            0.0,
+        ),
+        make_rule(
+            RuleType::DomainSuffix,
+            "test.com.cn",
+            0,
+            65535,
+            RuleAction::Pass,
+            0,
+            0.0,
+        ),
+    ];
+    let rs = TargetRuleSet::compile(rules).unwrap();
+
+    // api.test.com.cn 同时匹配 com.cn(priority=0) 和 test.com.cn(priority=1)
+    // 应取 priority=0 的 BLOCK
+    assert!(!rs
+        .check(&Address::Domain("api.test.com.cn".to_string()), 80)
+        .allowed);
+
+    // other.com.cn 只匹配 com.cn，应 BLOCK
+    assert!(!rs
+        .check(&Address::Domain("other.com.cn".to_string()), 80)
+        .allowed);
+}
+
+#[test]
+fn test_suffix_early_termination() {
+    // 验证 Trie 路径不存在时不会误匹配
+    let rules = vec![make_rule(
+        RuleType::DomainSuffix,
+        "specific.example.com",
+        0,
+        65535,
+        RuleAction::Pass,
+        0,
+        0.0,
+    )];
+    let rs = TargetRuleSet::compile(rules).unwrap();
+
+    // 匹配
+    assert!(rs
+        .check(
+            &Address::Domain("api.specific.example.com".to_string()),
+            80
+        )
+        .allowed);
+    // 不匹配：example.com 路径存在但 specific 节点才有规则
+    assert!(!rs
+        .check(&Address::Domain("other.example.com".to_string()), 80)
+        .allowed);
+    // 不匹配：完全不同的路径
+    assert!(!rs
+        .check(&Address::Domain("specific.other.com".to_string()), 80)
+        .allowed);
+}
+
+#[test]
+fn test_suffix_single_label() {
+    // 单级后缀（如 TLD）
+    let rules = vec![make_rule(
+        RuleType::DomainSuffix,
+        "cn",
+        0,
+        65535,
+        RuleAction::Pass,
+        0,
+        0.0,
+    )];
+    let rs = TargetRuleSet::compile(rules).unwrap();
+
+    assert!(rs
+        .check(&Address::Domain("example.cn".to_string()), 80)
+        .allowed);
+    assert!(rs
+        .check(&Address::Domain("a.b.c.cn".to_string()), 80)
+        .allowed);
+    assert!(rs
+        .check(&Address::Domain("cn".to_string()), 80)
+        .allowed);
+    assert!(!rs
+        .check(&Address::Domain("example.com".to_string()), 80)
+        .allowed);
+}
