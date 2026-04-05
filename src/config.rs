@@ -74,6 +74,11 @@ fn default_target_rules_file() -> PathBuf {
     PathBuf::from("target-rules.yaml")
 }
 
+/// 默认 Metrics HTTP 端点绑定地址
+fn default_metrics_bind() -> SocketAddr {
+    "127.0.0.1:9090".parse().unwrap()
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AppConfig {
     #[serde(default = "default_bind")]
@@ -131,6 +136,14 @@ pub struct AppConfig {
     /// 支持热加载，修改后自动生效
     #[serde(default = "default_target_rules_file")]
     pub target_rules_file: PathBuf,
+    /// 是否启用 Prometheus metrics 端点，默认 false
+    /// 启用后在 metrics_bind 地址暴露 /metrics HTTP 端点供 Prometheus 抓取
+    #[serde(default)]
+    pub metrics_enabled: bool,
+    /// Metrics HTTP 端点绑定地址，默认 "127.0.0.1:9090"
+    /// 仅在 metrics_enabled 为 true 时生效
+    #[serde(default = "default_metrics_bind")]
+    pub metrics_bind: SocketAddr,
 }
 
 impl AppConfig {
@@ -166,7 +179,9 @@ impl AppConfig {
             .set_default(
                 "target_rules_file",
                 default_target_rules_file().to_str().unwrap(),
-            )?;
+            )?
+            .set_default("metrics_enabled", false)?
+            .set_default("metrics_bind", default_metrics_bind().to_string())?;
 
         // 加载系统配置文件
         if let Some(config_dir) = dirs::config_dir() {
@@ -243,6 +258,8 @@ impl Default for AppConfig {
             access_file: default_access_file(),
             target_rules_enabled: false,
             target_rules_file: default_target_rules_file(),
+            metrics_enabled: false,
+            metrics_bind: default_metrics_bind(),
         }
     }
 }

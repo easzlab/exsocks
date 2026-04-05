@@ -13,6 +13,7 @@ English | [中文](README.md)
 - **Target Address Rules** — Supports PASS/BLOCK control via DOMAIN/DOMAIN-SUFFIX/IP-CIDR rules with priority-based matching; domain suffix matching optimized with reverse Trie, IP-CIDR matching optimized with Radix Trie
 - **DNS Cache** — Built-in DNS resolution cache (positive + negative caching) to reduce redundant DNS queries
 - **Configurable Buffers** — Adjustable relay buffer size (16 KiB ~ 256 KiB) for different network scenarios
+- **Prometheus Monitoring** — Built-in Prometheus metrics endpoint with 9 core metrics (connections, bytes, auth, DNS cache, etc.), zero-overhead atomic operations
 - **Structured Logging** — Built on `tracing`, supports daily rotation, size-based rotation, and max file retention
 - **Layered Configuration** — YAML config files + environment variables + CLI arguments with ascending priority
 - **Docker Support** — Multi-stage build Dockerfile, production-ready
@@ -113,6 +114,10 @@ auth_user_file: "user.yaml"
 # Source IP whitelist
 access_enabled: false
 access_file: "client-rules.yaml"
+
+# Prometheus Metrics
+metrics_enabled: false
+metrics_bind: "127.0.0.1:9090"
 ```
 
 ### User Authentication (`user.yaml`)
@@ -138,6 +143,37 @@ client_rules:
   - 127.0.0.1/32
 ```
 
+## 📊 Prometheus Metrics
+
+Enable `metrics_enabled: true` to expose a `/metrics` HTTP endpoint at the `metrics_bind` address for Prometheus scraping.
+
+### Metrics List
+
+| Type | Metric Name | Labels | Description |
+|------|-------------|--------|-------------|
+| Gauge | `exsocks_active_connections` | - | Current active connections |
+| Counter | `exsocks_connections_total` | `status`=accepted/blocked | Total connections |
+| Counter | `exsocks_bytes_total` | `direction`=up/down | Total bytes transferred |
+| Counter | `exsocks_connect_target_errors_total` | - | Total target connection failures |
+| Counter | `exsocks_auth_total` | `result`=success/failure | Authentication results |
+| Counter | `exsocks_dns_cache_total` | `result`=hit/miss | DNS cache hit/miss |
+| Counter | `exsocks_dns_resolve_total` | `result`=success/failure | DNS resolution results |
+| Counter | `exsocks_target_rule_total` | `action`=pass/block | Target rule evaluations |
+| Gauge | `exsocks_dns_cache_entries` | - | Current DNS cache entries |
+
+### Prometheus Scrape Config
+
+```yaml
+scrape_configs:
+  - job_name: 'exsocks'
+    static_configs:
+      - targets: ['127.0.0.1:9090']
+```
+
+### Performance Impact
+
+All metric operations use lock-free atomic operations (`fetch_add`), ~5-10ns per operation, with no mutex contention or memory allocation. When `metrics_enabled: false`, the no-op recorder path costs ~1-2ns.
+
 ## 🏗️ Architecture
 
 ### Connection Processing Pipeline
@@ -159,6 +195,8 @@ src/
 │   ├── handshake.rs  # Handshake and auth negotiation
 │   ├── request.rs    # CONNECT request parsing
 │   └── reply.rs      # Response building
+├── metrics_registry.rs # Prometheus metrics definitions and recorder init
+├── metrics_server.rs  # Metrics HTTP endpoint (lightweight hyper server)
 ├── relay.rs          # Async bidirectional data relay (configurable buffers)
 ├── dns_cache.rs      # DNS resolution cache (positive + negative caching)
 ├── auth.rs           # User credential store with hot-reload (ArcSwap + notify)

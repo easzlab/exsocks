@@ -1,3 +1,4 @@
+use metrics::counter;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -7,6 +8,7 @@ use super::protocol::{
 };
 use crate::auth::UserStore;
 use crate::error::SocksError;
+use crate::metrics_registry::AUTH_TOTAL;
 
 /// 执行 SOCKS5 握手。
 ///
@@ -123,9 +125,11 @@ async fn perform_username_password_auth(
     };
 
     if authenticated {
+        counter!(AUTH_TOTAL, "result" => "success").increment(1);
         stream.write_all(&[AUTH_VERSION, AUTH_SUCCESS]).await?;
         Ok(())
     } else {
+        counter!(AUTH_TOTAL, "result" => "failure").increment(1);
         stream.write_all(&[AUTH_VERSION, AUTH_FAILURE]).await?;
         Err(SocksError::AuthenticationFailed(username))
     }

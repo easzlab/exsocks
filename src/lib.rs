@@ -3,6 +3,8 @@ pub mod auth;
 pub mod config;
 pub mod dns_cache;
 pub mod error;
+pub mod metrics_registry;
+pub mod metrics_server;
 pub mod relay;
 pub mod server;
 pub mod socks5;

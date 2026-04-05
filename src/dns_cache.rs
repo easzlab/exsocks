@@ -2,10 +2,12 @@ use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
+use metrics::{counter, gauge};
 use tokio::net::{TcpStream, lookup_host};
 use tracing::debug;
 
 use crate::error::SocksError;
+use crate::metrics_registry::{DNS_CACHE_ENTRIES, DNS_CACHE_TOTAL, DNS_RESOLVE_TOTAL};
 
 /// DNS 解析结果
 enum DnsResult {
@@ -78,10 +80,12 @@ impl DnsCache {
                 match &entry.result {
                     DnsResult::Success(addrs) => {
                         debug!(domain, "DNS cache hit (positive)");
+                        counter!(DNS_CACHE_TOTAL, "result" => "hit").increment(1);
                         return Self::try_connect(addrs, port).await;
                     }
                     DnsResult::Failure(err_msg) => {
                         debug!(domain, "DNS cache hit (negative)");
+                        counter!(DNS_CACHE_TOTAL, "result" => "hit").increment(1);
                         return Err(SocksError::InvalidAddress(format!(
                             "DNS resolution failed (cached): {}",
                             err_msg
@@ -96,6 +100,7 @@ impl DnsCache {
         }
 
         // 2. 缓存未命中，执行 DNS 解析
+        counter!(DNS_CACHE_TOTAL, "result" => "miss").increment(1);
         debug!(domain, "DNS cache miss, resolving");
         let host = format!("{}:{}", domain, port);
 
@@ -109,6 +114,7 @@ impl DnsCache {
                 let ip_addrs: Vec<IpAddr> = addrs_iter.map(|sa| sa.ip()).collect();
                 if ip_addrs.is_empty() {
                     // DNS 解析返回空结果，视为失败，缓存负结果
+                    counter!(DNS_RESOLVE_TOTAL, "result" => "failure").increment(1);
                     let err_msg = format!("DNS resolution returned no addresses for {}", domain);
                     self.cache.insert(
                         domain.to_owned(),
@@ -117,10 +123,12 @@ impl DnsCache {
                             created_at: Instant::now(),
                         },
                     );
+                    gauge!(DNS_CACHE_ENTRIES).set(self.cache.len() as f64);
                     return Err(SocksError::InvalidAddress(err_msg));
                 }
 
                 // 解析成功，先尝试连接，再缓存正结果
+                counter!(DNS_RESOLVE_TOTAL, "result" => "success").increment(1);
                 let connect_result = Self::try_connect(&ip_addrs, port).await;
                 self.cache.insert(
                     domain.to_owned(),
@@ -129,10 +137,12 @@ impl DnsCache {
                         created_at: Instant::now(),
                     },
                 );
+                gauge!(DNS_CACHE_ENTRIES).set(self.cache.len() as f64);
                 connect_result
             }
             Err(e) => {
                 // DNS 解析失败，缓存负结果
+                counter!(DNS_RESOLVE_TOTAL, "result" => "failure").increment(1);
                 let err_msg = e.to_string();
                 debug!(domain, error = %err_msg, "DNS resolution failed, caching negative result");
                 self.cache.insert(
@@ -142,6 +152,7 @@ impl DnsCache {
                         created_at: Instant::now(),
                     },
                 );
+                gauge!(DNS_CACHE_ENTRIES).set(self.cache.len() as f64);
                 Err(SocksError::Io(e))
             }
         }

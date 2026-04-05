@@ -109,3 +109,21 @@ target_rules_enabled: false
 # 仅在 target_rules_enabled 为 true 时生效
 # 默认: "target-rules.yaml"
 target_rules_file: "target-rules.yaml"
+
+# ========== Prometheus Metrics 配置 ==========
+
+# 是否启用 Prometheus metrics 端点
+# 启用后在 metrics_bind 地址暴露 /metrics HTTP 端点供 Prometheus 抓取
+# 所有指标操作均为无锁原子操作，对代理性能几乎无影响
+# 默认: false
+metrics_enabled: false
+
+# Metrics HTTP 端点绑定地址
+# 仅在 metrics_enabled 为 true 时生效
+# Prometheus 抓取配置示例：
+#   scrape_configs:
+#     - job_name: 'exsocks'
+#       static_configs:
+#         - targets: ['127.0.0.1:9090']
+# 默认: "127.0.0.1:9090"
+metrics_bind: "127.0.0.1:9090"

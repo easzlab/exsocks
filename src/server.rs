@@ -2,6 +2,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use metrics::{counter, gauge};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::signal;
 use tokio::time::timeout;
@@ -14,10 +15,23 @@ use crate::auth::UserStore;
 use crate::config::AppConfig;
 use crate::dns_cache::DnsCache;
 use crate::error::SocksError;
+use crate::metrics_registry::{
+    ACTIVE_CONNECTIONS, BYTES_TOTAL, CONNECTIONS_TOTAL, CONNECT_TARGET_ERRORS_TOTAL,
+    TARGET_RULE_TOTAL,
+};
 use crate::relay;
 use crate::socks5;
 use crate::socks5::protocol::{REP_CONNECTION_NOT_ALLOWED, REP_SUCCEEDED};
 use crate::target_rules::TargetRuleControl;
+
+/// 活跃连接计数 guard - 利用 Drop 确保连接关闭时一定 decrement
+struct ActiveConnectionGuard;
+
+impl Drop for ActiveConnectionGuard {
+    fn drop(&mut self) {
+        gauge!(ACTIVE_CONNECTIONS).decrement(1);
+    }
+}
 
 pub async fn run(config: AppConfig) -> Result<(), SocksError> {
     let listener = TcpListener::bind(config.bind).await?;
@@ -108,6 +122,21 @@ pub async fn run_with_listener(
         None
     };
 
+    // 初始化 Prometheus metrics
+    if config.metrics_enabled {
+        let handle = crate::metrics_registry::init_metrics_recorder();
+        let metrics_bind = config.metrics_bind;
+        let metrics_cancel = cancel_token.clone();
+        tokio::spawn(async move {
+            if let Err(e) = crate::metrics_server::serve_metrics(metrics_bind, handle, metrics_cancel).await {
+                error!(error = %e, "Metrics server error");
+            }
+        });
+        info!(bind = %config.metrics_bind, "Prometheus metrics enabled");
+    } else {
+        info!("Prometheus metrics disabled");
+    }
+
     // 初始化目标地址规则管控
     let target_rule_control = if config.target_rules_enabled {
         let trc = Arc::new(
@@ -150,9 +179,12 @@ pub async fn run_with_listener(
                     && !ac.rules().is_allowed(peer_addr.ip())
                 {
                     warn!(ip = %peer_addr.ip(), "Connection blocked by whitelist");
+                    counter!(CONNECTIONS_TOTAL, "status" => "blocked").increment(1);
                     drop(socket);
                     continue;
                 }
+
+                counter!(CONNECTIONS_TOTAL, "status" => "accepted").increment(1);
 
                 let dns_cache = dns_cache.clone();
                 let user_store = user_store.clone();
@@ -192,6 +224,10 @@ async fn handle_connection(
     target_rule_control: Option<Arc<TargetRuleControl>>,
     cancel: CancellationToken,
 ) -> Result<(), SocksError> {
+    // 活跃连接计数：进入时 +1，退出时通过 Drop guard 自动 -1
+    gauge!(ACTIVE_CONNECTIONS).increment(1);
+    let _active_guard = ActiveConnectionGuard;
+
     socks5::perform_handshake(&mut socket, user_store.as_ref().map(|s| s.as_ref())).await?;
 
     let request = socks5::parse_request(&mut socket).await?;
@@ -207,7 +243,10 @@ async fn handle_connection(
                 warn!(target = %request.address, port = request.port, "Target BLOCKED by rule");
             }
         }
-        if !result.allowed {
+        if result.allowed {
+            counter!(TARGET_RULE_TOTAL, "action" => "pass").increment(1);
+        } else {
+            counter!(TARGET_RULE_TOTAL, "action" => "block").increment(1);
             let dummy_addr = std::net::SocketAddr::from(([0, 0, 0, 0], 0));
             socks5::send_reply(&mut socket, REP_CONNECTION_NOT_ALLOWED, dummy_addr).await?;
             return Err(SocksError::TargetDenied(
@@ -225,11 +264,13 @@ async fn handle_connection(
     {
         Ok(Ok(stream)) => stream,
         Ok(Err(e)) => {
+            counter!(CONNECT_TARGET_ERRORS_TOTAL).increment(1);
             return Err(SocksError::ConnectFailed(format!(
                 "{}:{} - {e}", request.address, request.port
             )));
         }
         Err(_) => {
+            counter!(CONNECT_TARGET_ERRORS_TOTAL).increment(1);
             return Err(SocksError::ConnectFailed(format!(
                 "{}:{} - timed out", request.address, request.port
             )));
@@ -242,6 +283,11 @@ async fn handle_connection(
     info!(target = %request.address, port = request.port, "Established");
 
     let (client_to_target, target_to_client) = relay::relay(socket, target, relay_buffer_size, cancel).await?;
+
+    // 记录传输字节数
+    counter!(BYTES_TOTAL, "direction" => "up").increment(client_to_target);
+    counter!(BYTES_TOTAL, "direction" => "down").increment(target_to_client);
+
     info!(
         bytes_up = client_to_target,
         bytes_down = target_to_client,

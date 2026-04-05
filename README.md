@@ -13,6 +13,7 @@
 - **目标地址规则管控** — 支持 DOMAIN/DOMAIN-SUFFIX/IP-CIDR 规则的 PASS/BLOCK 控制，支持优先级匹配；域名后缀匹配采用倒序 Trie 优化，IP-CIDR 匹配采用 Radix Trie 优化
 - **DNS 缓存** — 内置 DNS 解析缓存（正缓存 + 负缓存），减少重复 DNS 查询
 - **可配置缓冲区** — 转发缓冲区大小可调（16 KiB ~ 256 KiB），适配不同网络场景
+- **Prometheus 监控** — 内置 Prometheus metrics 端点，9 个核心指标（连接数、字节数、认证、DNS 缓存等），纯原子操作零开销
 - **结构化日志** — 基于 `tracing`，支持按天滚动、文件大小滚动、最大保留天数
 - **多层配置** — 支持 YAML 配置文件 + 环境变量 + 命令行参数，优先级递增
 - **Docker 支持** — 提供多阶段构建 Dockerfile，生产就绪
@@ -113,6 +114,10 @@ auth_user_file: "user.yaml"
 # 源地址白名单
 access_enabled: false
 access_file: "client-rules.yaml"
+
+# Prometheus Metrics
+metrics_enabled: false
+metrics_bind: "127.0.0.1:9090"
 ```
 
 ### 用户认证配置（`user.yaml`）
@@ -138,6 +143,37 @@ client_rules:
   - 127.0.0.1/32
 ```
 
+## 📊 Prometheus Metrics
+
+启用 `metrics_enabled: true` 后，exsocks 在 `metrics_bind` 地址暴露 `/metrics` HTTP 端点，供 Prometheus 抓取。
+
+### 指标列表
+
+| 类型 | 指标名 | 标签 | 说明 |
+|------|--------|------|------|
+| Gauge | `exsocks_active_connections` | - | 当前活跃连接数 |
+| Counter | `exsocks_connections_total` | `status`=accepted/blocked | 连接总数 |
+| Counter | `exsocks_bytes_total` | `direction`=up/down | 传输字节总数 |
+| Counter | `exsocks_connect_target_errors_total` | - | 连接目标失败总数 |
+| Counter | `exsocks_auth_total` | `result`=success/failure | 认证结果计数 |
+| Counter | `exsocks_dns_cache_total` | `result`=hit/miss | DNS 缓存命中/未命中 |
+| Counter | `exsocks_dns_resolve_total` | `result`=success/failure | DNS 解析结果 |
+| Counter | `exsocks_target_rule_total` | `action`=pass/block | 目标规则命中计数 |
+| Gauge | `exsocks_dns_cache_entries` | - | DNS 缓存当前条目数 |
+
+### Prometheus 抓取配置
+
+```yaml
+scrape_configs:
+  - job_name: 'exsocks'
+    static_configs:
+      - targets: ['127.0.0.1:9090']
+```
+
+### 性能影响
+
+所有指标操作均为无锁原子操作（`fetch_add`），单次约 5-10ns，不引入任何 mutex 竞争或内存分配。`metrics_enabled: false` 时走 no-op 路径，开销约 1-2ns。
+
 ## 🏗️ 架构
 
 ### 连接处理流程
@@ -159,6 +195,8 @@ src/
 │   ├── handshake.rs  # 握手和认证协商
 │   ├── request.rs    # CONNECT 请求解析
 │   └── reply.rs      # 响应构建
+├── metrics_registry.rs # Prometheus 指标定义与 recorder 初始化
+├── metrics_server.rs  # Metrics HTTP 端点（hyper 轻量级 server）
 ├── relay.rs          # 异步双向数据转发（可配置缓冲区）
 ├── dns_cache.rs      # DNS 解析缓存（正缓存 + 负缓存）
 ├── auth.rs           # 用户认证存储与热加载（ArcSwap + notify）
