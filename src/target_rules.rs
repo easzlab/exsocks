@@ -69,6 +69,8 @@ pub struct MatchResult {
     pub opt_flags: u8,
     /// 数值参数，供未来扩展使用
     pub opt_value: f64,
+    /// 命中的规则描述（如 "IPCIDR 10.0.0.0/8 0-65535 PASS"），未命中时为 None
+    pub matched_rule: Option<String>,
 }
 
 // ===== 内部数据结构 =====
@@ -82,6 +84,8 @@ struct PrioritizedRule {
     action: RuleAction,
     opt_flags: u8,
     opt_value: f64,
+    /// 规则描述，用于日志输出（如 "IPCIDR 10.0.0.0/8 0-65535 PASS"）
+    rule_desc: String,
 }
 
 impl PrioritizedRule {
@@ -328,6 +332,20 @@ impl TargetRuleSet {
         let mut cidr_trie_v6: PrefixMap<Ipv6Net, Vec<PrioritizedRule>> = PrefixMap::new();
 
         for (priority, rule) in rules.into_iter().enumerate() {
+            let rule_type_str = match &rule.rule_type {
+                RuleType::Domain => "DOMAIN",
+                RuleType::DomainSuffix => "DOMAIN-SUFFIX",
+                RuleType::IpCidr => "IPCIDR",
+            };
+            let action_str = match rule.action {
+                RuleAction::Pass => "PASS",
+                RuleAction::Block => "BLOCK",
+            };
+            let rule_desc = format!(
+                "{} {} {}-{} {}",
+                rule_type_str, rule.value, rule.port_start, rule.port_end, action_str
+            );
+
             let pr = PrioritizedRule {
                 priority,
                 port_start: rule.port_start,
@@ -335,6 +353,7 @@ impl TargetRuleSet {
                 action: rule.action,
                 opt_flags: rule.opt_flags,
                 opt_value: rule.opt_value,
+                rule_desc,
             };
 
             match rule.rule_type {
@@ -389,6 +408,7 @@ impl TargetRuleSet {
                 log: rule.opt_flags & OPT_LOG != 0,
                 opt_flags: rule.opt_flags,
                 opt_value: rule.opt_value,
+                matched_rule: Some(rule.rule_desc.clone()),
             },
             // 默认 BLOCK，不记录日志
             None => MatchResult {
@@ -396,6 +416,7 @@ impl TargetRuleSet {
                 log: false,
                 opt_flags: 0,
                 opt_value: 0.0,
+                matched_rule: None,
             },
         }
     }

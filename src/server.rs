@@ -237,10 +237,11 @@ async fn handle_connection(
     if let Some(trc) = &target_rule_control {
         let result = trc.rules().check(&request.address, request.port);
         if result.log {
+            let rule_desc = result.matched_rule.as_deref().unwrap_or("unknown");
             if result.allowed {
-                info!(target = %request.address, port = request.port, "Target PASS by rule");
+                debug!(target = %request.address, port = request.port, rule = rule_desc, "Target PASS by rule");
             } else {
-                warn!(target = %request.address, port = request.port, "Target BLOCKED by rule");
+                debug!(target = %request.address, port = request.port, rule = rule_desc, "Target BLOCKED by rule");
             }
         }
         if result.allowed {
@@ -280,7 +281,7 @@ async fn handle_connection(
 
     let bind_addr = target.local_addr()?;
     socks5::send_reply(&mut socket, REP_SUCCEEDED, bind_addr).await?;
-    info!(target = %request.address, port = request.port, "Established");
+    debug!(target = %request.address, port = request.port, "Established");
 
     let (client_to_target, target_to_client) = relay::relay(socket, target, relay_buffer_size, cancel).await?;
 
@@ -288,7 +289,7 @@ async fn handle_connection(
     counter!(BYTES_TOTAL, "direction" => "up").increment(client_to_target);
     counter!(BYTES_TOTAL, "direction" => "down").increment(target_to_client);
 
-    info!(
+    debug!(
         bytes_up = client_to_target,
         bytes_down = target_to_client,
         "Closed"
