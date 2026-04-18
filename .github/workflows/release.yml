@@ -6,7 +6,7 @@ on:
       - 'v*'
 
 jobs:
-  gorelease:
+  myrelease:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
