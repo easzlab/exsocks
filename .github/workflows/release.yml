@@ -1,33 +1,106 @@
-name: Release
+name: Build and Release Rust Binaries
 
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  BINARY_NAME: exsocks
+  # Extract version from tag (e.g. v1.0.0 -> v1.0.0)
+  VERSION: ${{ github.ref_name || 'dev' }}
 
 jobs:
-  myrelease:
-    runs-on: ubuntu-latest
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+
+          - os: macos-latest
+            target: x86_64-apple-darwin
+
+          - os: macos-latest
+            target: aarch64-apple-darwin
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          fetch-depth: 0
+          targets: ${{ matrix.target }}
 
-      - name: Set up Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-
-      - name: Test
-        run: make test
-
-      - name: Build binaries
+      - name: Install Linux ARM64 linker
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
-          make build-release
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
 
-      - name: Create Release
-        uses: softprops/action-gh-release@v3
-        with:
-          files: |
-            target/*/release/exsocks
+      - name: Configure linker for Linux ARM64
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          mkdir -p .cargo
+          printf '[target.aarch64-unknown-linux-gnu]\nlinker = "aarch64-linux-gnu-gcc"\n' >> .cargo/config.toml
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Strip binary
+        run: |
+          BINARY=target/${{ matrix.target }}/release/${{ env.BINARY_NAME }}
+          case "${{ matrix.target }}" in
+            aarch64-unknown-linux-gnu)
+              aarch64-linux-gnu-strip "$BINARY"
+              ;;
+            *)
+              strip "$BINARY"
+              ;;
+          esac
+
+      - name: Package
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARCHIVE_NAME: ${{ env.BINARY_NAME }}-${{ env.VERSION }}-${{ matrix.target }}.tar.gz
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/${{ env.BINARY_NAME }} dist/
+          tar -czf "${ARCHIVE_NAME}" -C dist ${{ env.BINARY_NAME }}
+          if command -v sha256sum &> /dev/null; then
+            sha256sum "${ARCHIVE_NAME}" > "${ARCHIVE_NAME}.sha256"
+          else
+            shasum -a 256 "${ARCHIVE_NAME}" > "${ARCHIVE_NAME}.sha256"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            ${{ env.BINARY_NAME }}-${{ env.VERSION }}-${{ matrix.target }}.tar.gz
+            ${{ env.BINARY_NAME }}-${{ env.VERSION }}-${{ matrix.target }}.tar.gz.sha256
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - run: find artifacts -type f
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*

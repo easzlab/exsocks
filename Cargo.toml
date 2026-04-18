@@ -28,6 +28,10 @@ hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 
+[profile.release]
+lto = true
+codegen-units = 1
+
 [dev-dependencies]
 tokio-test = "0.4"
 tempfile = "3"

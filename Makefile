@@ -37,12 +37,11 @@ TARGET ?= $(DEFAULT_TARGET)
 
 # 构建配置
 CARGO_FLAGS :=
-RELEASE_RUSTFLAGS := -C opt-level=3
 
 # 目录
 BUILD_DIR := target
 RELEASE_DIR := $(BUILD_DIR)/$(TARGET)/release
-DIST_DIR := dist
+DIST_DIR := $(BUILD_DIR)/dist
 EXAMPLE_DIR := example
 
 # Docker 配置
@@ -122,11 +121,30 @@ build: ## 开发构建
 build-release: ## 生产优化构建
 	@echo "$(BLUE)=== 生产构建 [$(TARGET)] ===$(NC)"
 	@echo "版本: $(APP_VERSION), 提交: $(GIT_COMMIT), 时间: $(BUILD_TIME)"
-	RUSTFLAGS="$(RELEASE_RUSTFLAGS)" \
-	CARGO_PROFILE_RELEASE_LTO=true \
-	CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 \
-		cargo build --release --target $(TARGET)
+	cargo build --release --target $(TARGET)
 	@echo "$(GREEN)✓ 构建完成: $(RELEASE_DIR)/$(APP_NAME)$(NC)"
+
+# 当前平台的交叉编译目标列表（仅编译同操作系统的两种架构）
+ifeq ($(UNAME_S),Darwin)
+  BUILD_TARGETS := aarch64-apple-darwin x86_64-apple-darwin
+else
+  BUILD_TARGETS := aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu
+endif
+
+.PHONY: build-all
+build-all: ## 编译当前操作系统的 arm64/amd64 双架构
+	@echo "$(BLUE)=== 编译双架构 [$(UNAME_S)] ===$(NC)"
+	@echo "版本: $(APP_VERSION), 提交: $(GIT_COMMIT), 时间: $(BUILD_TIME)"
+	@echo "目标: $(BUILD_TARGETS)"
+	@mkdir -p $(DIST_DIR)
+	rustup target add $(BUILD_TARGETS)
+	@for t in $(BUILD_TARGETS); do \
+		echo "$(BLUE)--- 构建 [$$t] ---$(NC)"; \
+		cargo build --release --target $t || exit 1; \
+		cp $(BUILD_DIR)/$$t/release/$(APP_NAME) $(DIST_DIR)/$(APP_NAME)-$$t; \
+		echo "$(GREEN)✓ $(DIST_DIR)/$(APP_NAME)-$$t$(NC)"; \
+	done
+	@echo "$(GREEN)✓ 构建完成，产物位于 $(DIST_DIR)/$(NC)"
 
 .PHONY: build-docker
 build-docker: ## 构建 Docker 镜像
@@ -145,20 +163,20 @@ build-docker: ## 构建 Docker 镜像
 # -----------------------------------------------------------------------------
 
 .PHONY: test
-test: unit-test integration-test ## 运行所有测试
+test: test-unit test-integration ## 运行所有测试
 
-.PHONY: unit-test
-unit-test: ## 单元测试
+.PHONY: test-unit
+test-unit: ## 单元测试
 	@echo "$(BLUE)=== 单元测试 ===$(NC)"
 	cargo test --lib -- --nocapture
 
-.PHONY: integration-test
-integration-test: ## 集成测试
+.PHONY: test-integration
+test-integration: ## 集成测试
 	@echo "$(BLUE)=== 集成测试 ===$(NC)"
 	cargo test --test '*' -- --nocapture
 
 .PHONY: test-docker
-test-docker: ## run tests inside a Docker container
+test-docker: ## 在测试容器中运行测试用例
 	@echo "Running containerized tests for macOS/Linux..."
 	@bash tests/run-test-container.sh
 	@echo "✓ Containerized tests completed"
