@@ -1,4 +1,10 @@
-target
+.qoder
+.aone_copilot
+.idea
+.codex
+.claude
+
+/target
 
 logs
 

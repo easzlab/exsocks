@@ -90,7 +90,10 @@ RUN set -eux; \
 	; \
 	rm -rf /var/lib/apt/lists/*
 
+# 复制配置文件
+COPY example ./
+
 # 从构建阶段复制二进制文件
 COPY --from=builder /app/target/*/release/exsocks /app/exsocks
 
-ENTRYPOINT ["/app/exsocks"]
+CMD ["/app/exsocks", "-c", "server.yaml"]

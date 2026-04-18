@@ -135,10 +135,10 @@ build-docker: ## 构建 Docker 镜像
 		--build-arg APP_VERSION=$(APP_VERSION) \
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
 		--build-arg BUILD_TIME=$(BUILD_TIME) \
-		-t $(DOCKER_IMAGE):$(DOCKER_TAG) \
+		-t $(DOCKER_IMAGE):v$(DOCKER_TAG) \
 		-t $(DOCKER_IMAGE):latest \
 		.
-	@echo "$(GREEN)✓ 镜像: $(DOCKER_IMAGE):$(DOCKER_TAG)$(NC)"
+	@echo "$(GREEN)✓ 镜像: $(DOCKER_IMAGE):v$(DOCKER_TAG)$(NC)"
 
 # -----------------------------------------------------------------------------
 # 测试
