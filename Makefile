@@ -147,12 +147,13 @@ build-all: ## 编译当前操作系统的 arm64/amd64 双架构
 	@echo "$(GREEN)✓ 构建完成，产物位于 $(DIST_DIR)/$(NC)"
 
 .PHONY: build-docker
-build-docker: ## 构建 Docker 镜像
+build-docker: ## 构建 Docker 镜像（本地默认启用国内镜像源，USE_CHINA_MIRROR=false 可关闭）
 	@echo "$(BLUE)=== Docker 构建 ===$(NC)"
 	docker build \
 		--build-arg APP_VERSION=$(APP_VERSION) \
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
 		--build-arg BUILD_TIME=$(BUILD_TIME) \
+		--build-arg USE_CHINA_MIRROR=$(or $(USE_CHINA_MIRROR),true) \
 		-t $(DOCKER_IMAGE):v$(DOCKER_TAG) \
 		-t $(DOCKER_IMAGE):latest \
 		.
@@ -176,9 +177,9 @@ test-integration: ## 集成测试
 	cargo test --test '*' -- --nocapture
 
 .PHONY: test-docker
-test-docker: ## 在测试容器中运行测试用例
+test-docker: ## 在测试容器中运行测试用例（本地默认启用国内镜像源，USE_CHINA_MIRROR=false 可关闭）
 	@echo "Running containerized tests for macOS/Linux..."
-	@bash tests/run-test-container.sh
+	@USE_CHINA_MIRROR=$(or $(USE_CHINA_MIRROR),true) bash tests/run-test-container.sh
 	@echo "✓ Containerized tests completed"
 
 .PHONY: test-bench

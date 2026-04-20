@@ -8,8 +8,14 @@ IMAGE_NAME="exsocks-test"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-echo "==> Building test suite image..."
-docker build -f "${PROJECT_ROOT}/Dockerfile.test" -t "${IMAGE_NAME}" "${PROJECT_ROOT}"
+USE_CHINA_MIRROR="${USE_CHINA_MIRROR:-false}"
+
+echo "==> Building test suite image (USE_CHINA_MIRROR=${USE_CHINA_MIRROR})..."
+docker build \
+  --build-arg USE_CHINA_MIRROR="${USE_CHINA_MIRROR}" \
+  -f "${PROJECT_ROOT}/Dockerfile.test" \
+  -t "${IMAGE_NAME}" \
+  "${PROJECT_ROOT}"
 
 echo "==> Running tests suite in container..."
 # --privileged grants the container full access to the host kernel
