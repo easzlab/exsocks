@@ -1,7 +1,10 @@
 [package]
 name = "exsocks"
-version = "0.7.1"
+version = "0.7.2"
 edition = "2024"
+
+[features]
+bench = []
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -22,6 +25,7 @@ arc-swap = "1"
 serde_yaml = "0.9"
 ipnet = "2"
 prefix-trie = "0.8"
+smallvec = "1"
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.16", default-features = false }
 hyper = { version = "1", features = ["server", "http1"] }
@@ -36,3 +40,10 @@ codegen-units = 1
 tokio-test = "0.4"
 tempfile = "3"
 tokio-util = "0.7"
+criterion = { version = "0.5", features = ["html_reports"] }
+smallvec = "1"
+
+[[bench]]
+name = "domain_match_bench"
+harness = false
+required-features = ["bench"]

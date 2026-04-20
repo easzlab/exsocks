@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use smallvec::SmallVec;
+
 use arc_swap::ArcSwap;
 use ipnet::{IpNet, Ipv4Net, Ipv6Net};
 use prefix_trie::PrefixMap;
@@ -422,6 +424,8 @@ impl TargetRuleSet {
     }
 
     /// 域名匹配：查询 domain_index 和 suffix_trie，取全局优先级最高的
+    ///
+    /// 使用 `SmallVec<[&str; 8]>` 收集倒序 labels，域名层级 ≤ 8 时零堆分配。
     fn match_domain(&self, domain: &str, port: u16) -> Option<&PrioritizedRule> {
         let lower = domain.to_ascii_lowercase();
         let mut best: Option<&PrioritizedRule> = None;
@@ -438,6 +442,56 @@ impl TargetRuleSet {
         // 2. 后缀匹配：倒序 Trie 一次遍历
         //    对于 "api.test.com.cn"，倒序为 ["cn", "com", "test", "api"]
         //    沿 Trie 路径遍历，每个节点只 hash 一个短 label
+        let labels: SmallVec<[&str; 8]> = lower.split('.').rev().collect();
+        best = self.suffix_trie.find_best_match(&labels, port, best);
+
+        best
+    }
+
+    /// Vec 版本的域名匹配（仅供 benchmark 对比）
+    ///
+    /// 与 `match_domain` 逻辑完全相同，唯一区别是使用 `Vec<&str>`
+    /// 替代 `SmallVec<[&str; 8]>` 收集倒序 labels，用于量化 SmallVec 的收益。
+    #[cfg(feature = "bench")]
+    pub fn check_with_vec(&self, address: &Address, port: u16) -> MatchResult {
+        let best = match address {
+            Address::Domain(domain) => self.match_domain_vec(domain, port),
+            Address::IPv4(ip) => self.match_cidr(&IpAddr::V4(*ip), port),
+            Address::IPv6(ip) => self.match_cidr(&IpAddr::V6(*ip), port),
+        };
+
+        match best {
+            Some(rule) => MatchResult {
+                allowed: rule.action == RuleAction::Pass,
+                log: rule.opt_flags & OPT_LOG != 0,
+                opt_flags: rule.opt_flags,
+                opt_value: rule.opt_value,
+                matched_rule: Some(rule.rule_desc.clone()),
+            },
+            None => MatchResult {
+                allowed: false,
+                log: false,
+                opt_flags: 0,
+                opt_value: 0.0,
+                matched_rule: None,
+            },
+        }
+    }
+
+    /// Vec 版本的 match_domain（仅供 benchmark 对比）
+    #[cfg(feature = "bench")]
+    fn match_domain_vec(&self, domain: &str, port: u16) -> Option<&PrioritizedRule> {
+        let lower = domain.to_ascii_lowercase();
+        let mut best: Option<&PrioritizedRule> = None;
+
+        if let Some(rules) = self.domain_index.get(&lower) {
+            for r in rules {
+                if r.port_matches(port) && r.is_higher_priority_than(best) {
+                    best = Some(r);
+                }
+            }
+        }
+
         let labels: Vec<&str> = lower.split('.').rev().collect();
         best = self.suffix_trie.find_best_match(&labels, port, best);
 

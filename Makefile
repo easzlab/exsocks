@@ -181,10 +181,10 @@ test-docker: ## 在测试容器中运行测试用例
 	@bash tests/run-test-container.sh
 	@echo "✓ Containerized tests completed"
 
-.PHONY: bench
-bench: ## 基准测试
+.PHONY: test-bench
+test-bench: ## 基准测试
 	@echo "$(BLUE)=== 基准测试 ===$(NC)"
-	cargo bench
+	cargo bench --features bench --bench domain_match_bench
 
 .PHONY: coverage
 coverage: ## 生成测试覆盖率报告（需安装 cargo-tarpaulin，仅 Linux）
