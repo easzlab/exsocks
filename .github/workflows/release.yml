@@ -75,7 +75,8 @@ jobs:
         run: |
           mkdir -p dist
           cp target/${{ matrix.target }}/release/${{ env.BINARY_NAME }} dist/
-          tar -czf "${ARCHIVE_NAME}" -C dist ${{ env.BINARY_NAME }}
+          cp -r example dist/
+          tar -czf "${ARCHIVE_NAME}" -C dist ${{ env.BINARY_NAME }} example
           if command -v sha256sum &> /dev/null; then
             sha256sum "${ARCHIVE_NAME}" > "${ARCHIVE_NAME}.sha256"
           else

@@ -1,6 +1,6 @@
 [package]
 name = "exsocks"
-version = "0.7.2"
+version = "0.7.3"
 edition = "2024"
 
 [features]
@@ -47,3 +47,7 @@ smallvec = "1"
 name = "domain_match_bench"
 harness = false
 required-features = ["bench"]
+
+[[bench]]
+name = "cidr_match_bench"
+harness = false
