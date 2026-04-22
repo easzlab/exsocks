@@ -69,9 +69,19 @@ fn default_access_file() -> PathBuf {
     PathBuf::from("client-rules.yaml")
 }
 
-/// 默认目标地址规则配置文件路径
-fn default_target_rules_file() -> PathBuf {
-    PathBuf::from("target-rules.yaml")
+/// 默认动态目标地址规则配置文件路径（用户自定义，高优先级）
+fn default_dynamic_target_rules_file() -> PathBuf {
+    PathBuf::from("dynamic-target-rules.yaml")
+}
+
+/// 默认静态目标地址规则配置文件路径（外部接口拉取，低优先级）
+fn default_static_target_rules_file() -> PathBuf {
+    PathBuf::from("static-target-rules.yaml")
+}
+
+/// 默认静态规则拉取间隔：36000 秒（10 小时）
+fn default_static_target_rules_fetch_interval() -> u64 {
+    36000
 }
 
 /// 默认 Metrics HTTP 端点绑定地址
@@ -131,11 +141,35 @@ pub struct AppConfig {
     /// 启用后根据配置的规则对目标地址（IP/域名）和端口进行匹配检查
     #[serde(default)]
     pub target_rules_enabled: bool,
-    /// 目标地址规则配置文件路径，默认 "target-rules.yaml"
+    /// 动态目标地址规则配置文件路径，默认 "dynamic-target-rules.yaml"
+    /// 由用户配置自定义规则，优先级高于静态规则
     /// 仅在 target_rules_enabled 为 true 时生效
     /// 支持热加载，修改后自动生效
-    #[serde(default = "default_target_rules_file")]
-    pub target_rules_file: PathBuf,
+    #[serde(default = "default_dynamic_target_rules_file")]
+    pub dynamic_target_rules_file: PathBuf,
+    /// 静态目标地址规则配置文件路径，默认 "static-target-rules.yaml"
+    /// 由代理服务器定期向外部接口请求后生成，优先级低于动态规则
+    /// 仅在 target_rules_enabled 为 true 时生效
+    /// 支持热加载，修改后自动生效
+    ///
+    /// ⚠️ 启用远程拉取（static_target_rules_fetch_enabled）后，
+    /// 此文件内容将被拉取结果完全覆盖，不要手动编辑
+    #[serde(default = "default_static_target_rules_file")]
+    pub static_target_rules_file: PathBuf,
+    /// 是否启用定期从外部接口拉取静态规则，默认 false
+    /// 启用后将定期请求 static_target_rules_fetch_url 获取规则数据
+    /// 并自动生成/更新 static_target_rules_file
+    #[serde(default)]
+    pub static_target_rules_fetch_enabled: bool,
+    /// 静态规则拉取接口 URL
+    /// 仅在 static_target_rules_fetch_enabled 为 true 时生效
+    /// 接口需返回 JSON 格式的 ACL 数据
+    #[serde(default)]
+    pub static_target_rules_fetch_url: String,
+    /// 静态规则拉取间隔（秒），默认 36000（10 小时）
+    /// 仅在 static_target_rules_fetch_enabled 为 true 时生效
+    #[serde(default = "default_static_target_rules_fetch_interval")]
+    pub static_target_rules_fetch_interval: u64,
     /// 是否启用 Prometheus metrics 端点，默认 false
     /// 启用后在 metrics_bind 地址暴露 /metrics HTTP 端点供 Prometheus 抓取
     #[serde(default)]
@@ -177,8 +211,18 @@ impl AppConfig {
             )?
             .set_default("target_rules_enabled", false)?
             .set_default(
-                "target_rules_file",
-                default_target_rules_file().to_str().unwrap(),
+                "dynamic_target_rules_file",
+                default_dynamic_target_rules_file().to_str().unwrap(),
+            )?
+            .set_default(
+                "static_target_rules_file",
+                default_static_target_rules_file().to_str().unwrap(),
+            )?
+            .set_default("static_target_rules_fetch_enabled", false)?
+            .set_default("static_target_rules_fetch_url", "")?
+            .set_default(
+                "static_target_rules_fetch_interval",
+                default_static_target_rules_fetch_interval() as i64,
             )?
             .set_default("metrics_enabled", false)?
             .set_default("metrics_bind", default_metrics_bind().to_string())?;
@@ -257,7 +301,11 @@ impl Default for AppConfig {
             access_enabled: false,
             access_file: default_access_file(),
             target_rules_enabled: false,
-            target_rules_file: default_target_rules_file(),
+            dynamic_target_rules_file: default_dynamic_target_rules_file(),
+            static_target_rules_file: default_static_target_rules_file(),
+            static_target_rules_fetch_enabled: false,
+            static_target_rules_fetch_url: String::new(),
+            static_target_rules_fetch_interval: default_static_target_rules_fetch_interval(),
             metrics_enabled: false,
             metrics_bind: default_metrics_bind(),
         }
@@ -284,7 +332,11 @@ mod tests {
         assert_eq!(config.dns_cache_max_entries, 1024);
         assert_eq!(config.dns_cache_negative_ttl, 30);
         assert!(!config.target_rules_enabled);
-        assert_eq!(config.target_rules_file, PathBuf::from("target-rules.yaml"));
+        assert_eq!(config.dynamic_target_rules_file, PathBuf::from("dynamic-target-rules.yaml"));
+        assert_eq!(config.static_target_rules_file, PathBuf::from("static-target-rules.yaml"));
+        assert!(!config.static_target_rules_fetch_enabled);
+        assert_eq!(config.static_target_rules_fetch_url, "");
+        assert_eq!(config.static_target_rules_fetch_interval, 36000);
     }
 
     #[test]
@@ -394,42 +446,4 @@ bind: "0.0.0.0:1080"
         assert_eq!(config.access_file, PathBuf::from("client-rules.yaml"));
     }
 
-    #[test]
-    fn test_default_target_rules_fields() {
-        let config = AppConfig::default();
-        assert!(!config.target_rules_enabled);
-        assert_eq!(config.target_rules_file, PathBuf::from("target-rules.yaml"));
-    }
-
-    #[test]
-    fn test_load_target_rules_fields_from_yaml() {
-        let yaml_content = r#"
-target_rules_enabled: true
-target_rules_file: "/etc/exsocks/target-rules.yaml"
-"#;
-        let mut temp_file = Builder::new().suffix(".yaml").tempfile().unwrap();
-        write!(temp_file, "{}", yaml_content).unwrap();
-
-        let path = temp_file.path().to_path_buf();
-        let config = AppConfig::load(Some(&path)).unwrap();
-        assert!(config.target_rules_enabled);
-        assert_eq!(
-            config.target_rules_file,
-            PathBuf::from("/etc/exsocks/target-rules.yaml")
-        );
-    }
-
-    #[test]
-    fn test_target_rules_fields_default_when_not_in_yaml() {
-        let yaml_content = r#"
-bind: "0.0.0.0:1080"
-"#;
-        let mut temp_file = Builder::new().suffix(".yaml").tempfile().unwrap();
-        write!(temp_file, "{}", yaml_content).unwrap();
-
-        let path = temp_file.path().to_path_buf();
-        let config = AppConfig::load(Some(&path)).unwrap();
-        assert!(!config.target_rules_enabled);
-        assert_eq!(config.target_rules_file, PathBuf::from("target-rules.yaml"));
-    }
 }

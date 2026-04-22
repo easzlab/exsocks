@@ -140,14 +140,18 @@ pub async fn run_with_listener(
     // 初始化目标地址规则管控
     let target_rule_control = if config.target_rules_enabled {
         let trc = Arc::new(
-            TargetRuleControl::load(&config.target_rules_file).map_err(|e| {
+            TargetRuleControl::load(
+                &config.dynamic_target_rules_file,
+                &config.static_target_rules_file,
+            )
+            .map_err(|e| {
                 SocksError::TargetRulesConfig(format!(
                     "Failed to load target rules config: {}",
                     e
                 ))
             })?,
         );
-        let _watcher = trc.watch().map_err(|e| {
+        let _watchers = trc.watch().map_err(|e| {
             SocksError::TargetRulesConfig(format!(
                 "Failed to start target rules config watcher: {}",
                 e
@@ -156,10 +160,24 @@ pub async fn run_with_listener(
         let watcher_token = cancel_token.clone();
         tokio::spawn(async move {
             watcher_token.cancelled().await;
-            drop(_watcher);
+            drop(_watchers);
         });
+
+        // 启动定期拉取外部 ACL 接口任务（如果启用）
+        if config.static_target_rules_fetch_enabled
+            && !config.static_target_rules_fetch_url.is_empty()
+        {
+            trc.start_fetch_task(
+                config.static_target_rules_fetch_url.clone(),
+                Duration::from_secs(config.static_target_rules_fetch_interval),
+                cancel_token.clone(),
+            );
+        }
+
         info!(
-            path = %config.target_rules_file.display(),
+            dynamic = %config.dynamic_target_rules_file.display(),
+            r#static = %config.static_target_rules_file.display(),
+            fetch_enabled = config.static_target_rules_fetch_enabled,
             "Target rules enabled with hot-reload"
         );
         Some(trc)

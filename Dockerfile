@@ -52,6 +52,7 @@ COPY Makefile ./Makefile
 RUN mkdir -p src benches && \
     echo "fn main() {}" > src/main.rs && \
     echo "fn main() {}" > benches/domain_match_bench.rs && \
+    echo "fn main() {}" > benches/cidr_match_bench.rs && \
     make build-release && \
     rm -rf src benches
 

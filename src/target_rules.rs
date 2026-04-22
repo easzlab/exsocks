@@ -1,9 +1,15 @@
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use bytes::Bytes;
+use http_body_util::{BodyExt, Empty};
+use hyper_util::client::legacy::Client as HttpClient;
+use hyper_util::client::legacy::connect::HttpConnector;
+use hyper_util::rt::TokioExecutor;
 use smallvec::SmallVec;
 
 use arc_swap::ArcSwap;
@@ -11,10 +17,14 @@ use ipnet::{IpNet, Ipv4Net, Ipv6Net};
 use prefix_trie::PrefixMap;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Deserialize;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::error::SocksError;
 use crate::socks5::protocol::Address;
+
+/// HTTP 客户端类型（用于 ACL 接口请求）
+type AclHttpClient = HttpClient<HttpConnector, Empty<Bytes>>;
 
 // ===== opt1 位标志常量 =====
 
@@ -558,26 +568,100 @@ fn normalize_ip(ip: IpAddr) -> IpAddr {
     }
 }
 
+// ===== 外部 ACL 接口数据结构 =====
+
+/// 外部 ACL 接口响应根结构
+#[derive(Debug, Deserialize)]
+pub struct AclResponse {
+    pub data: AclData,
+    #[allow(dead_code)]
+    pub status: String,
+}
+
+/// ACL 数据层
+#[derive(Debug, Deserialize)]
+pub struct AclData {
+    pub netacl: NetAcl,
+}
+
+/// 网络 ACL 规则
+#[derive(Debug, Deserialize)]
+pub struct NetAcl {
+    #[serde(default, rename = "BlockDomains")]
+    pub block_domains: Vec<String>,
+    #[serde(default, rename = "PassDomains")]
+    pub pass_domains: Vec<String>,
+    #[serde(default, rename = "BlockIPs")]
+    pub block_ips: Vec<String>,
+    #[serde(default, rename = "PassIPs")]
+    pub pass_ips: Vec<String>,
+}
+
+/// 将外部 ACL 接口数据转换为 target_rules YAML 格式字符串
+pub fn convert_acl_to_yaml(acl: &NetAcl) -> String {
+    let mut lines = Vec::new();
+    lines.push("# 此文件由代理服务器自动生成，请勿手动修改".to_string());
+    lines.push("# 数据来源：外部 ACL 接口定期拉取".to_string());
+    lines.push(String::new());
+    lines.push("target_rules:".to_string());
+
+    // BlockDomains: 以 '.' 开头的为后缀匹配，否则为精确匹配
+    for domain in &acl.block_domains {
+        if let Some(suffix) = domain.strip_prefix('.') {
+            lines.push(format!("  - [DOMAIN-SUFFIX, {}, 0, 65535, BLOCK, 1]", suffix));
+        } else {
+            lines.push(format!("  - [DOMAIN, {}, 0, 65535, BLOCK, 1]", domain));
+        }
+    }
+
+    // PassDomains: 以 '.' 开头的为后缀匹配，否则为精确匹配
+    for domain in &acl.pass_domains {
+        if let Some(suffix) = domain.strip_prefix('.') {
+            lines.push(format!("  - [DOMAIN-SUFFIX, {}, 0, 65535, PASS, 1]", suffix));
+        } else {
+            lines.push(format!("  - [DOMAIN, {}, 0, 65535, PASS, 1]", domain));
+        }
+    }
+
+    // BlockIPs: CIDR 阻止
+    for cidr in &acl.block_ips {
+        lines.push(format!("  - [IPCIDR, {}, 0, 65535, BLOCK, 1]", cidr));
+    }
+
+    // PassIPs: CIDR 放行
+    for cidr in &acl.pass_ips {
+        lines.push(format!("  - [IPCIDR, {}, 0, 65535, PASS, 1]", cidr));
+    }
+
+    lines.join("\n") + "\n"
+}
+
 // ===== 热加载控制器 =====
 
 #[derive(Debug)]
 pub struct TargetRuleControl {
     rules: Arc<ArcSwap<TargetRuleSet>>,
-    file_path: PathBuf,
+    /// 动态规则文件路径（用户自定义，高优先级）
+    dynamic_file: PathBuf,
+    /// 静态规则文件路径（外部接口拉取，低优先级）
+    static_file: PathBuf,
 }
 
 impl TargetRuleControl {
-    /// 从 YAML 文件加载目标规则
-    pub fn load(path: &Path) -> Result<Self, SocksError> {
-        let rule_set = Self::parse_file(path)?;
+    /// 从双 YAML 文件加载目标规则（dynamic 优先级高于 static）
+    pub fn load(dynamic_path: &Path, static_path: &Path) -> Result<Self, SocksError> {
+        let merged_rules = Self::load_merged_rules(dynamic_path, static_path)?;
+        let count = merged_rules.rule_count();
         info!(
-            path = %path.display(),
-            rules = rule_set.rule_count(),
-            "Target rules loaded"
+            dynamic = %dynamic_path.display(),
+            r#static = %static_path.display(),
+            rules = count,
+            "Target rules loaded (dynamic + static)"
         );
         Ok(Self {
-            rules: Arc::new(ArcSwap::from_pointee(rule_set)),
-            file_path: path.to_path_buf(),
+            rules: Arc::new(ArcSwap::from_pointee(merged_rules)),
+            dynamic_file: dynamic_path.to_path_buf(),
+            static_file: static_path.to_path_buf(),
         })
     }
 
@@ -588,86 +672,103 @@ impl TargetRuleControl {
 
     /// 重新加载规则文件，原子替换规则集
     pub fn reload(&self) -> Result<(), SocksError> {
-        let new_rules = Self::parse_file(&self.file_path)?;
+        let new_rules = Self::load_merged_rules(&self.dynamic_file, &self.static_file)?;
         let count = new_rules.rule_count();
         self.rules.store(Arc::new(new_rules));
         info!(
-            path = %self.file_path.display(),
+            dynamic = %self.dynamic_file.display(),
+            r#static = %self.static_file.display(),
             rules = count,
-            "Target rules reloaded"
+            "Target rules reloaded (dynamic + static)"
         );
         Ok(())
     }
 
-    /// 启动文件变更监听，返回 watcher（调用方需保持其存活）
-    pub fn watch(self: &Arc<Self>) -> Result<RecommendedWatcher, SocksError> {
-        let watch_path = self
-            .file_path
-            .canonicalize()
-            .unwrap_or_else(|_| self.file_path.clone());
-        let watch_dir = watch_path
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .to_path_buf();
-        let file_name = watch_path
-            .file_name()
-            .unwrap_or_default()
-            .to_os_string();
+    /// 启动文件变更监听，同时监听 dynamic 和 static 两个文件
+    /// 返回 watchers（调用方需保持其存活）
+    pub fn watch(self: &Arc<Self>) -> Result<Vec<RecommendedWatcher>, SocksError> {
+        let mut watchers = Vec::new();
+
+        // 收集需要监听的 (目录, 文件名) 对，自动去重同目录
+        let files = [&self.dynamic_file, &self.static_file];
+        let mut dir_to_filenames: HashMap<PathBuf, Vec<OsString>> = HashMap::new();
+
+        for file in &files {
+            let canonical = file
+                .canonicalize()
+                .unwrap_or_else(|_| (*file).clone());
+            let dir = canonical
+                .parent()
+                .map(|p| p.to_path_buf())
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or_else(|| PathBuf::from("."));
+            let name = canonical
+                .file_name()
+                .unwrap_or_default()
+                .to_os_string();
+            dir_to_filenames.entry(dir).or_default().push(name);
+        }
 
         let (tx, mut rx) = tokio::sync::mpsc::channel::<()>(1);
-        let trc = Arc::clone(self);
 
-        let mut watcher = notify::recommended_watcher(
-            move |result: Result<notify::Event, notify::Error>| {
-                match result {
-                    Ok(event) => {
-                        use notify::EventKind;
-                        match event.kind {
-                            EventKind::Create(_)
-                            | EventKind::Modify(_)
-                            | EventKind::Remove(_) => {}
-                            _ => {
-                                return;
+        for (watch_dir, filenames) in &dir_to_filenames {
+            let tx = tx.clone();
+            let filenames_for_log: Vec<OsString> = filenames.clone();
+            let filenames_for_closure: Vec<OsString> = filenames.clone();
+
+            let mut watcher = notify::recommended_watcher(
+                move |result: Result<notify::Event, notify::Error>| {
+                    match result {
+                        Ok(event) => {
+                            use notify::EventKind;
+                            match event.kind {
+                                EventKind::Create(_)
+                                | EventKind::Modify(_)
+                                | EventKind::Remove(_) => {}
+                                _ => return,
+                            }
+
+                            let affects_target = event.paths.iter().any(|p| {
+                                p.file_name()
+                                    .map(|n| filenames_for_closure.iter().any(|f| f == n))
+                                    .unwrap_or(false)
+                            });
+
+                            if affects_target {
+                                let _ = tx.try_send(());
                             }
                         }
-
-                        let affects_target = event.paths.iter().any(|p| {
-                            p.file_name()
-                                .map(|n| n == file_name)
-                                .unwrap_or(false)
-                        });
-
-                        if affects_target {
-                            let _ = tx.try_send(());
+                        Err(e) => {
+                            error!(error = %e, "Target rules file watcher error");
                         }
                     }
-                    Err(e) => {
-                        error!(error = %e, "Target rules file watcher error");
-                    }
-                }
-            },
-        )
-        .map_err(|e| {
-            SocksError::TargetRulesConfig(format!("Failed to create file watcher: {}", e))
-        })?;
-
-        watcher
-            .watch(&watch_dir, RecursiveMode::NonRecursive)
+                },
+            )
             .map_err(|e| {
-                SocksError::TargetRulesConfig(format!(
-                    "Failed to watch directory {}: {}",
-                    watch_dir.display(),
-                    e
-                ))
+                SocksError::TargetRulesConfig(format!("Failed to create file watcher: {}", e))
             })?;
 
-        info!(
-            path = %watch_path.display(),
-            dir = %watch_dir.display(),
-            "Target rules file watcher started"
-        );
+            watcher
+                .watch(watch_dir, RecursiveMode::NonRecursive)
+                .map_err(|e| {
+                    SocksError::TargetRulesConfig(format!(
+                        "Failed to watch directory {}: {}",
+                        watch_dir.display(),
+                        e
+                    ))
+                })?;
+
+            info!(
+                dir = %watch_dir.display(),
+                files = ?filenames_for_log,
+                "Target rules file watcher started"
+            );
+
+            watchers.push(watcher);
+        }
 
         // 启动防抖消费任务
+        let trc = Arc::clone(self);
         tokio::spawn(async move {
             loop {
                 if rx.recv().await.is_none() {
@@ -690,14 +791,223 @@ impl TargetRuleControl {
             }
         });
 
-        Ok(watcher)
+        Ok(watchers)
     }
 
-    /// 从 YAML 文件解析目标规则
-    fn parse_file(path: &Path) -> Result<TargetRuleSet, SocksError> {
-        let content = std::fs::read_to_string(path).map_err(|e| {
-            SocksError::TargetRulesConfig(format!("Failed to read {}: {}", path.display(), e))
+    /// 启动定期拉取外部 ACL 接口任务
+    ///
+    /// 定期从 `fetch_url` 拉取 ACL 数据，转换为 target-rules YAML 格式，
+    /// 写入 `static_file`。文件变更后 watcher 会自动触发 reload。
+    pub fn start_fetch_task(
+        self: &Arc<Self>,
+        fetch_url: String,
+        interval: Duration,
+        cancel_token: CancellationToken,
+    ) {
+        let static_file = self.static_file.clone();
+
+        let client: AclHttpClient = HttpClient::builder(TokioExecutor::new())
+            .build_http();
+
+        info!(
+            url = %fetch_url,
+            interval_secs = interval.as_secs(),
+            static_file = %static_file.display(),
+            "Static target rules fetch task started"
+        );
+
+        tokio::spawn(async move {
+            // 首次立即拉取
+            Self::fetch_and_write_static(&client, &fetch_url, &static_file).await;
+
+            let mut tick = tokio::time::interval(interval);
+            tick.tick().await; // 跳过首次立即触发的 tick
+
+            loop {
+                tokio::select! {
+                    _ = cancel_token.cancelled() => {
+                        info!("Static target rules fetch task stopped");
+                        break;
+                    }
+                    _ = tick.tick() => {
+                        Self::fetch_and_write_static(&client, &fetch_url, &static_file).await;
+                    }
+                }
+            }
+        });
+    }
+
+    /// 从外部 ACL 接口拉取数据并写入静态规则文件
+    ///
+    /// 写入成功后由 file watcher 自动检测变更并触发 reload（防抖 500ms），
+    /// 不在此处主动 reload，避免双重 reload。
+    async fn fetch_and_write_static(
+        client: &AclHttpClient,
+        fetch_url: &str,
+        static_file: &Path,
+    ) {
+        match Self::fetch_acl(client, fetch_url).await {
+            Ok(yaml_content) => {
+                // 校验生成的 YAML 可被正确解析为规则，防止恶意/异常数据破坏静态规则文件
+                if let Err(e) = Self::validate_yaml_rules(&yaml_content) {
+                    error!(
+                        error = %e,
+                        url = %fetch_url,
+                        "Generated YAML from remote ACL is invalid, keeping previous static rules"
+                    );
+                    return;
+                }
+                // 原子写入：先写临时文件再 rename，避免写入中途崩溃留下半截文件
+                let tmp_file = static_file.with_extension("yaml.tmp");
+                match tokio::fs::write(&tmp_file, &yaml_content).await {
+                    Ok(()) => {
+                        if let Err(e) = tokio::fs::rename(&tmp_file, static_file).await {
+                            error!(
+                                error = %e,
+                                tmp = %tmp_file.display(),
+                                target = %static_file.display(),
+                                "Failed to rename tmp file to static target rules file"
+                            );
+                            // 清理临时文件
+                            let _ = tokio::fs::remove_file(&tmp_file).await;
+                        } else {
+                            info!(
+                                path = %static_file.display(),
+                                "Static target rules file updated from remote ACL, watcher will trigger reload"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        error!(
+                            error = %e,
+                            path = %tmp_file.display(),
+                            "Failed to write tmp static target rules file"
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    url = %fetch_url,
+                    "Failed to fetch ACL from remote, keeping previous static rules"
+                );
+            }
+        }
+    }
+
+    /// 从外部 ACL 接口拉取数据并转换为 YAML 格式字符串
+    async fn fetch_acl(client: &AclHttpClient, url: &str) -> Result<String, SocksError> {
+        let uri: hyper::Uri = url.parse().map_err(|e: hyper::http::uri::InvalidUri| {
+            SocksError::TargetRulesConfig(format!("Invalid URL '{}': {}", url, e))
         })?;
+
+        let req = hyper::Request::get(uri)
+            .body(Empty::<Bytes>::new())
+            .map_err(|e| SocksError::TargetRulesConfig(format!(
+                "Failed to build HTTP request: {}", e
+            )))?;
+
+        let response = tokio::time::timeout(
+            Duration::from_secs(30),
+            client.request(req),
+        )
+        .await
+        .map_err(|_| SocksError::TargetRulesConfig(format!(
+            "HTTP request to {} timed out", url
+        )))?
+        .map_err(|e| SocksError::TargetRulesConfig(format!(
+            "HTTP request to {} failed: {}", url, e
+        )))?;
+
+        if !response.status().is_success() {
+            return Err(SocksError::TargetRulesConfig(format!(
+                "HTTP request to {} returned status {}", url, response.status()
+            )));
+        }
+
+        let body = response.into_body().collect().await.map_err(|e| {
+            SocksError::TargetRulesConfig(format!(
+                "Failed to read response body from {}: {}", url, e
+            ))
+        })?;
+        let bytes = body.to_bytes();
+
+        let acl_response: AclResponse = serde_json::from_slice(&bytes).map_err(|e| {
+            SocksError::TargetRulesConfig(format!(
+                "Failed to parse ACL response from {}: {}", url, e
+            ))
+        })?;
+
+        // 校验接口响应状态
+        if acl_response.status != "ok" {
+            return Err(SocksError::TargetRulesConfig(format!(
+                "ACL response from {} returned status '{}', expected 'ok'",
+                url, acl_response.status
+            )));
+        }
+
+        Ok(convert_acl_to_yaml(&acl_response.data.netacl))
+    }
+
+    /// 校验生成的 YAML 内容是否可被正确解析为目标规则
+    fn validate_yaml_rules(yaml_content: &str) -> Result<(), SocksError> {
+        let config: TargetRulesConfig = serde_yaml::from_str(yaml_content).map_err(|e| {
+            SocksError::TargetRulesConfig(format!("Invalid YAML format: {}", e))
+        })?;
+        for (i, arr) in config.target_rules.iter().enumerate() {
+            parse_rule_array(arr, i)?;
+        }
+        Ok(())
+    }
+
+    /// 合并两份文件的规则（dynamic 在前，static 在后）
+    fn load_merged_rules(
+        dynamic_path: &Path,
+        static_path: &Path,
+    ) -> Result<TargetRuleSet, SocksError> {
+        let dynamic_rules = Self::parse_rules_from_file(dynamic_path)?;
+        let static_rules = Self::parse_rules_from_file(static_path)?;
+
+        let dynamic_count = dynamic_rules.len();
+        let static_count = static_rules.len();
+
+        // dynamic 规则排前面（优先级高），static 排后面
+        let mut merged = Vec::with_capacity(dynamic_count + static_count);
+        merged.extend(dynamic_rules);
+        merged.extend(static_rules);
+
+        info!(
+            dynamic_rules = dynamic_count,
+            static_rules = static_count,
+            total = merged.len(),
+            "Merged target rules (dynamic first)"
+        );
+
+        TargetRuleSet::compile(merged)
+    }
+
+    /// 从 YAML 文件解析目标规则列表
+    ///
+    /// 文件不存在时返回空规则列表（static 文件初始可能不存在）
+    fn parse_rules_from_file(path: &Path) -> Result<Vec<TargetRule>, SocksError> {
+        let content = match std::fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                info!(
+                    path = %path.display(),
+                    "Target rules file not found, using empty rules"
+                );
+                return Ok(Vec::new());
+            }
+            Err(e) => {
+                return Err(SocksError::TargetRulesConfig(format!(
+                    "Failed to read {}: {}",
+                    path.display(),
+                    e
+                )));
+            }
+        };
 
         let config: TargetRulesConfig = serde_yaml::from_str(&content).map_err(|e| {
             SocksError::TargetRulesConfig(format!("Failed to parse {}: {}", path.display(), e))
@@ -708,7 +1018,7 @@ impl TargetRuleControl {
             rules.push(parse_rule_array(arr, i)?);
         }
 
-        TargetRuleSet::compile(rules)
+        Ok(rules)
     }
 }
 

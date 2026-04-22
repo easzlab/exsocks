@@ -299,7 +299,7 @@ pub async fn start_target_rules_test_server(
 
     let mut config = AppConfig::default();
     config.target_rules_enabled = true;
-    config.target_rules_file = target_rules_file;
+    config.dynamic_target_rules_file = target_rules_file;
 
     let handle = tokio::spawn(async move {
         exsocks::server::run_with_listener(config, listener, Some(token_clone)).await

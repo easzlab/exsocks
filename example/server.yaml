@@ -99,16 +99,44 @@ access_file: "client-rules.yaml"
 
 # 是否启用目标地址规则管控
 # 启用后，根据配置的规则对目标地址（IP/域名）和端口进行匹配检查，决定放行或阻止
+# 规则合并逻辑：dynamic 规则优先级高于 static 规则（first-match-wins）
 # 未命中任何规则时默认阻止（BLOCK），必须显式配置 PASS 规则才能允许连接
 # 默认: false
 target_rules_enabled: false
 
-# 目标地址规则配置文件路径
+# 动态目标地址规则配置文件路径（用户自定义，高优先级）
+# 由用户手动配置自定义规则，优先级高于静态规则
 # 支持相对路径（相对于工作目录）和绝对路径
 # 该文件支持热加载，修改后自动生效，无需重启服务
 # 仅在 target_rules_enabled 为 true 时生效
-# 默认: "target-rules.yaml"
-target_rules_file: "target-rules.yaml"
+# 默认: "dynamic-target-rules.yaml"
+dynamic_target_rules_file: "dynamic-target-rules.yaml"
+
+# 静态目标地址规则配置文件路径（外部接口拉取，低优先级）
+# 由代理服务器定期向外部接口请求后自动生成，优先级低于动态规则
+# 该文件支持热加载，修改后自动生效，无需重启服务
+# 仅在 target_rules_enabled 为 true 时生效
+# ⚠️ 启用远程拉取后，此文件内容将被拉取结果完全覆盖，不要手动编辑
+# 默认: "static-target-rules.yaml"
+static_target_rules_file: "static-target-rules.yaml"
+
+# 是否启用定期从外部接口拉取静态规则
+# 启用后将定期请求 static_target_rules_fetch_url 获取 ACL 数据
+# 并自动生成/更新 static_target_rules_file
+# 默认: false
+static_target_rules_fetch_enabled: false
+
+# 静态规则拉取接口 URL
+# 仅在 static_target_rules_fetch_enabled 为 true 时生效
+# 接口需返回 JSON 格式的 ACL 数据，格式示例：
+#   {"data":{"netacl":{"BlockDomains":[...],"PassDomains":[...],"BlockIPs":[...],"PassIPs":[...]}}}
+# 默认: ""
+static_target_rules_fetch_url: "http://127.0.0.1:8000/acl"
+
+# 静态规则拉取间隔（秒）
+# 仅在 static_target_rules_fetch_enabled 为 true 时生效
+# 默认: 36000 (10小时)
+static_target_rules_fetch_interval: 36000
 
 # ========== Prometheus Metrics 配置 ==========
 
