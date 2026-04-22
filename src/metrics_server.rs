@@ -34,7 +34,13 @@ pub async fn serve_metrics(
     loop {
         tokio::select! {
             result = listener.accept() => {
-                let (stream, _) = result?;
+                let (stream, _) = match result {
+                    Ok(conn) => conn,
+                    Err(e) => {
+                        error!(error = %e, "Metrics server accept error");
+                        continue;
+                    }
+                };
                 let handle = handle.clone();
                 let io = TokioIo::new(stream);
 

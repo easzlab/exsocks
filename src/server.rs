@@ -124,15 +124,21 @@ pub async fn run_with_listener(
 
     // 初始化 Prometheus metrics
     if config.metrics_enabled {
-        let handle = crate::metrics_registry::init_metrics_recorder();
-        let metrics_bind = config.metrics_bind;
-        let metrics_cancel = cancel_token.clone();
-        tokio::spawn(async move {
-            if let Err(e) = crate::metrics_server::serve_metrics(metrics_bind, handle, metrics_cancel).await {
-                error!(error = %e, "Metrics server error");
+        match crate::metrics_registry::init_metrics_recorder() {
+            Ok(handle) => {
+                let metrics_bind = config.metrics_bind;
+                let metrics_cancel = cancel_token.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = crate::metrics_server::serve_metrics(metrics_bind, handle, metrics_cancel).await {
+                        error!(error = %e, "Metrics server error");
+                    }
+                });
+                info!(bind = %config.metrics_bind, "Prometheus metrics enabled");
             }
-        });
-        info!(bind = %config.metrics_bind, "Prometheus metrics enabled");
+            Err(e) => {
+                warn!(error = %e, "Failed to initialize Prometheus metrics recorder, metrics disabled");
+            }
+        }
     } else {
         info!("Prometheus metrics disabled");
     }

@@ -80,13 +80,13 @@ pub fn describe_metrics() {
 ///
 /// `PrometheusHandle` 用于在 HTTP 端点中调用 `render()` 生成 Prometheus 格式文本。
 /// 此函数只能调用一次（`metrics` crate 全局 recorder 只能设置一次）。
-pub fn init_metrics_recorder() -> PrometheusHandle {
+///
+/// 返回 `Result`，初始化失败时不会 panic，由调用方决定降级策略。
+pub fn init_metrics_recorder() -> Result<PrometheusHandle, Box<dyn std::error::Error + Send + Sync>> {
     let builder = PrometheusBuilder::new();
-    let handle = builder
-        .install_recorder()
-        .expect("failed to install Prometheus metrics recorder");
+    let handle = builder.install_recorder()?;
 
     describe_metrics();
 
-    handle
+    Ok(handle)
 }

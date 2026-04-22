@@ -125,7 +125,10 @@ async fn perform_username_password_auth(
     };
 
     if authenticated {
-        counter!(AUTH_TOTAL, "result" => "success").increment(1);
+        // 仅在认证模式下记录 metrics，避免非认证模式的“跳过校验即通过”污染指标数据
+        if user_store.is_some() {
+            counter!(AUTH_TOTAL, "result" => "success").increment(1);
+        }
         stream.write_all(&[AUTH_VERSION, AUTH_SUCCESS]).await?;
         Ok(())
     } else {

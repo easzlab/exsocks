@@ -20,6 +20,10 @@
 //! - **16-32 KiB**：适合低内存环境或大量短连接场景
 
 use std::io;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::task::{Context, Poll};
 
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -30,23 +34,58 @@ use crate::error::SocksError;
 /// 默认转发缓冲区大小：64 KiB
 pub const DEFAULT_BUFFER_SIZE: usize = 65536;
 
+/// 计数写入器：包装 AsyncWrite，实时累加写入字节数到共享原子计数器。
+///
+/// 用于在 cancel 场景下仍能获取已传输的准确字节数。
+struct CountingWriter<'a, W> {
+    inner: &'a mut W,
+    counter: &'a AtomicU64,
+}
+
+impl<W: AsyncWrite + Unpin> AsyncWrite for CountingWriter<'_, W> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        let this = self.get_mut();
+        match Pin::new(&mut *this.inner).poll_write(cx, buf) {
+            Poll::Ready(Ok(n)) => {
+                this.counter.fetch_add(n as u64, Ordering::Relaxed);
+                Poll::Ready(Ok(n))
+            }
+            other => other,
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut *self.get_mut().inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut *self.get_mut().inner).poll_shutdown(cx)
+    }
+}
+
 /// 单向异步拷贝：reader → writer。
 ///
-/// 使用指定大小构建 BufReader 进行拷贝，
+/// 使用指定大小构建 BufReader 进行拷贝，通过 CountingWriter 实时跟踪字节数，
 /// 拷贝完成后对 writer 执行 shutdown 通知对端 EOF。
 async fn copy_one_direction<R, W>(
     reader: &mut R,
     writer: &mut W,
     buffer_size: usize,
-) -> io::Result<u64>
+    bytes_counter: &AtomicU64,
+) -> io::Result<()>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
+    let mut counting_writer = CountingWriter { inner: writer, counter: bytes_counter };
     let mut buffer = tokio::io::BufReader::with_capacity(buffer_size, reader);
-    let bytes_copied = tokio::io::copy_buf(&mut buffer, writer).await?;
-    writer.shutdown().await?;
-    Ok(bytes_copied)
+    tokio::io::copy_buf(&mut buffer, &mut counting_writer).await?;
+    counting_writer.inner.shutdown().await?;
+    Ok(())
 }
 
 /// 启动双向数据转发，返回 (client→target 字节数, target→client 字节数)。
@@ -72,29 +111,39 @@ pub async fn relay(
     let (mut client_reader, mut client_writer) = client.into_split();
     let (mut target_reader, mut target_writer) = target.into_split();
 
+    // 使用共享原子计数器跟踪字节数，即使 cancel 中断也能获取准确值
+    let c2t_bytes = Arc::new(AtomicU64::new(0));
+    let t2c_bytes = Arc::new(AtomicU64::new(0));
+
+    let c2t_counter = c2t_bytes.clone();
     let cancel_c2t = cancel.clone();
     let client_to_target = tokio::spawn(async move {
         tokio::select! {
             biased;
-            _ = cancel_c2t.cancelled() => Ok(0),
-            result = copy_one_direction(&mut client_reader, &mut target_writer, buffer_size) => result,
+            _ = cancel_c2t.cancelled() => Ok(()),
+            result = copy_one_direction(&mut client_reader, &mut target_writer, buffer_size, &c2t_counter) => result,
         }
     });
 
+    let t2c_counter = t2c_bytes.clone();
     let cancel_t2c = cancel.clone();
     let target_to_client = tokio::spawn(async move {
         tokio::select! {
             biased;
-            _ = cancel_t2c.cancelled() => Ok(0),
-            result = copy_one_direction(&mut target_reader, &mut client_writer, buffer_size) => result,
+            _ = cancel_t2c.cancelled() => Ok(()),
+            result = copy_one_direction(&mut target_reader, &mut client_writer, buffer_size, &t2c_counter) => result,
         }
     });
 
     let (c2t_result, t2c_result) = tokio::join!(client_to_target, target_to_client);
 
     // 传播 JoinError（任务 panic）和内部 io::Error
-    let bytes_up = c2t_result.map_err(|e| SocksError::Io(io::Error::other(e)))??;
-    let bytes_down = t2c_result.map_err(|e| SocksError::Io(io::Error::other(e)))??;
+    c2t_result.map_err(|e| SocksError::Io(io::Error::other(e)))??;
+    t2c_result.map_err(|e| SocksError::Io(io::Error::other(e)))??;
+
+    // 从共享计数器读取实际传输字节数（cancel 场景下也是准确值）
+    let bytes_up = c2t_bytes.load(Ordering::Relaxed);
+    let bytes_down = t2c_bytes.load(Ordering::Relaxed);
 
     Ok((bytes_up, bytes_down))
 }

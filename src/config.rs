@@ -86,7 +86,7 @@ fn default_static_target_rules_fetch_interval() -> u64 {
 
 /// 默认 Metrics HTTP 端点绑定地址
 fn default_metrics_bind() -> SocketAddr {
-    "127.0.0.1:9090".parse().unwrap()
+    "127.0.0.1:9190".parse().unwrap()
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -174,7 +174,7 @@ pub struct AppConfig {
     /// 启用后在 metrics_bind 地址暴露 /metrics HTTP 端点供 Prometheus 抓取
     #[serde(default)]
     pub metrics_enabled: bool,
-    /// Metrics HTTP 端点绑定地址，默认 "127.0.0.1:9090"
+    /// Metrics HTTP 端点绑定地址，默认 "127.0.0.1:9190"
     /// 仅在 metrics_enabled 为 true 时生效
     #[serde(default = "default_metrics_bind")]
     pub metrics_bind: SocketAddr,
