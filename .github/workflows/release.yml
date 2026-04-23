@@ -93,7 +93,7 @@ jobs:
         if: matrix.target == 'aarch64-unknown-linux-musl'
         run: |
           mkdir -p .cargo
-          printf '[target.aarch64-unknown-linux-musl]\nlinker = "aarch64-linux-musl-gcc"\n' >> .cargo/config.toml
+          printf '[target.aarch64-unknown-linux-musl]\nlinker = "aarch64-unknown-linux-musl-gcc"\n' >> .cargo/config.toml
 
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
