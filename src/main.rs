@@ -2,7 +2,9 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use clap::Parser;
+use time::UtcOffset;
 use tracing::{error, info};
+use tracing_subscriber::fmt::time::OffsetTime;
 
 use exsocks::config::AppConfig;
 use exsocks::error::SocksError;
@@ -65,9 +67,20 @@ fn init_logging(
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(log_level));
 
+    let offset_hours: i8 = std::env::var("TZ_OFFSET")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(8);
+    let utc_offset = UtcOffset::from_hms(offset_hours, 0, 0).expect("Valid UTC offset");
+    let timer = OffsetTime::new(
+        utc_offset,
+        time::format_description::well_known::Rfc3339,
+    );
+
     tracing_subscriber::fmt()
         .with_env_filter(env_filter)
         .with_writer(non_blocking)
+        .with_timer(timer)
         .with_ansi(false)
         .with_target(true)
         .with_thread_ids(true)
