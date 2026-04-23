@@ -124,6 +124,24 @@ build-release: ## 生产优化构建
 	cargo build --release --target $(TARGET)
 	@echo "$(GREEN)✓ 构建完成: $(RELEASE_DIR)/$(APP_NAME)$(NC)"
 
+# 静态编译目标列表（musl，不依赖系统 GLIBC）
+STATIC_TARGETS := x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+
+.PHONY: build-static
+build-static: ## 静态编译 Linux 双架构（musl，不依赖 GLIBC）
+	@echo "$(BLUE)=== 静态编译 [musl] ===$(NC)"
+	@echo "版本: $(APP_VERSION), 提交: $(GIT_COMMIT), 时间: $(BUILD_TIME)"
+	@echo "目标: $(STATIC_TARGETS)"
+	@mkdir -p $(DIST_DIR)
+	rustup target add $(STATIC_TARGETS)
+	@for t in $(STATIC_TARGETS); do \
+		echo "$(BLUE)--- 构建 [$t] ---$(NC)"; \
+		cargo build --release --target $t || exit 1; \
+		cp $(BUILD_DIR)/$t/release/$(APP_NAME) $(DIST_DIR)/$(APP_NAME)-$t; \
+		echo "$(GREEN)✓ $(DIST_DIR)/$(APP_NAME)-$t$(NC)"; \
+	done
+	@echo "$(GREEN)✓ 静态构建完成，产物位于 $(DIST_DIR)/$(NC)"
+
 # 当前平台的交叉编译目标列表（仅编译同操作系统的两种架构）
 ifeq ($(UNAME_S),Darwin)
   BUILD_TARGETS := aarch64-apple-darwin x86_64-apple-darwin

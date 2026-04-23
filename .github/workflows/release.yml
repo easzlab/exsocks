@@ -29,6 +29,14 @@ jobs:
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
 
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            static: true
+
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            static: true
+
           - os: macos-latest
             target: x86_64-apple-darwin
 
@@ -54,6 +62,24 @@ jobs:
           mkdir -p .cargo
           printf '[target.aarch64-unknown-linux-gnu]\nlinker = "aarch64-linux-gnu-gcc"\n' >> .cargo/config.toml
 
+      - name: Install musl tools
+        if: matrix.static
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-musl" ]; then
+            sudo apt-get install -y gcc-aarch64-linux-gnu musl-dev
+            # Install aarch64 musl cross-compiler
+            curl -fsSL https://musl.cc/aarch64-linux-musl-cross.tgz | sudo tar xz -C /opt
+            echo "/opt/aarch64-linux-musl-cross/bin" >> $GITHUB_PATH
+          fi
+
+      - name: Configure linker for musl ARM64
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        run: |
+          mkdir -p .cargo
+          printf '[target.aarch64-unknown-linux-musl]\nlinker = "aarch64-linux-musl-gcc"\n' >> .cargo/config.toml
+
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
@@ -63,6 +89,12 @@ jobs:
           case "${{ matrix.target }}" in
             aarch64-unknown-linux-gnu)
               aarch64-linux-gnu-strip "$BINARY"
+              ;;
+            aarch64-unknown-linux-musl)
+              aarch64-linux-musl-strip "$BINARY"
+              ;;
+            *-musl)
+              strip "$BINARY"
               ;;
             *)
               strip "$BINARY"
