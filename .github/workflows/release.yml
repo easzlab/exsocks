@@ -69,8 +69,30 @@ jobs:
           sudo apt-get install -y musl-tools
           if [ "${{ matrix.target }}" = "aarch64-unknown-linux-musl" ]; then
             sudo apt-get install -y gcc-aarch64-linux-gnu musl-dev
-            # Install aarch64 musl cross-compiler
-            curl -fsSL https://musl.cc/aarch64-linux-musl-cross.tgz | sudo tar xz -C /opt
+            # Install aarch64 musl cross-compiler with retry and fallback mirrors
+            MUSL_ARCHIVE="aarch64-linux-musl-cross.tgz"
+            MUSL_URLS=(
+              "https://more.musl.cc/x86_64-linux-musl/${MUSL_ARCHIVE}"
+              "https://musl.cc/${MUSL_ARCHIVE}"
+            )
+            DOWNLOADED=false
+            for url in "${MUSL_URLS[@]}"; do
+              echo "Trying: ${url}"
+              for attempt in 1 2 3; do
+                echo "  Attempt ${attempt}..."
+                if curl -fsSL --connect-timeout 30 --retry 2 --retry-delay 5 -o "/tmp/${MUSL_ARCHIVE}" "${url}"; then
+                  DOWNLOADED=true
+                  break 2
+                fi
+                sleep 5
+              done
+            done
+            if [ "${DOWNLOADED}" = false ]; then
+              echo "::error::Failed to download musl cross-compiler from all mirrors"
+              exit 1
+            fi
+            sudo tar xzf "/tmp/${MUSL_ARCHIVE}" -C /opt
+            rm -f "/tmp/${MUSL_ARCHIVE}"
             echo "/opt/aarch64-linux-musl-cross/bin" >> $GITHUB_PATH
           fi
 
