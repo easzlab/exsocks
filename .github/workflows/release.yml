@@ -106,7 +106,7 @@ jobs:
               aarch64-linux-gnu-strip "$BINARY"
               ;;
             aarch64-unknown-linux-musl)
-              aarch64-linux-musl-strip "$BINARY"
+              aarch64-unknown-linux-musl-strip "$BINARY"
               ;;
             *-musl)
               strip "$BINARY"
