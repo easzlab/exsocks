@@ -222,7 +222,11 @@ pub async fn run_with_listener(
                 tokio::spawn(async move {
                     let result = handle_connection(socket, peer_addr, connect_timeout, relay_buffer_size, dns_cache, user_store, trc, token).await;
                     if let Err(e) = result {
-                        error!(error = %e, "Connection error");
+                        if is_peer_closed_error(&e) {
+                            debug!(error = %e, "Connection closed by peer");
+                        } else {
+                            error!(error = %e, "Connection error");
+                        }
                     }
                 }.instrument(info_span!("conn", %peer_addr)));
             }
@@ -324,4 +328,22 @@ async fn handle_connection(
     );
 
     Ok(())
+}
+
+/// 判断是否为常见的对端关闭连接错误（Broken pipe、Connection reset 等）。
+///
+/// 这类错误在代理场景中非常常见（客户端关闭标签页、网络切换等），
+/// 属于正常连接生命周期行为，不应以 ERROR 级别记录。
+fn is_peer_closed_error(err: &SocksError) -> bool {
+    if let SocksError::Io(io_err) = err {
+        matches!(
+            io_err.kind(),
+            std::io::ErrorKind::BrokenPipe
+                | std::io::ErrorKind::ConnectionReset
+                | std::io::ErrorKind::ConnectionAborted
+                | std::io::ErrorKind::UnexpectedEof
+        )
+    } else {
+        false
+    }
 }
