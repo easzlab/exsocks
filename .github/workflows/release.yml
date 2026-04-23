@@ -69,31 +69,24 @@ jobs:
           sudo apt-get install -y musl-tools
           if [ "${{ matrix.target }}" = "aarch64-unknown-linux-musl" ]; then
             sudo apt-get install -y gcc-aarch64-linux-gnu musl-dev
-            # Install aarch64 musl cross-compiler with retry and fallback mirrors
-            MUSL_ARCHIVE="aarch64-linux-musl-cross.tgz"
-            MUSL_URLS=(
-              "https://more.musl.cc/x86_64-linux-musl/${MUSL_ARCHIVE}"
-              "https://musl.cc/${MUSL_ARCHIVE}"
-            )
-            DOWNLOADED=false
-            for url in "${MUSL_URLS[@]}"; do
-              echo "Trying: ${url}"
-              for attempt in 1 2 3; do
-                echo "  Attempt ${attempt}..."
-                if curl -fsSL --connect-timeout 30 --retry 2 --retry-delay 5 -o "/tmp/${MUSL_ARCHIVE}" "${url}"; then
-                  DOWNLOADED=true
-                  break 2
-                fi
-                sleep 5
-              done
+            # Install aarch64 musl cross-compiler
+            MUSL_ARCHIVE="aarch64-unknown-linux-musl.tar.xz"
+            MUSL_URL="https://github.com/cross-tools/musl-cross/releases/download/20250929/${MUSL_ARCHIVE}"
+            echo "Downloading: ${MUSL_URL}"
+            for attempt in 1 2 3; do
+              echo "  Attempt ${attempt}..."
+              if curl -fsSL --connect-timeout 30 --retry 2 --retry-delay 5 -o "/tmp/${MUSL_ARCHIVE}" "${MUSL_URL}"; then
+                break
+              fi
+              if [ "${attempt}" -eq 3 ]; then
+                echo "::error::Failed to download musl cross-compiler"
+                exit 1
+              fi
+              sleep 5
             done
-            if [ "${DOWNLOADED}" = false ]; then
-              echo "::error::Failed to download musl cross-compiler from all mirrors"
-              exit 1
-            fi
-            sudo tar xzf "/tmp/${MUSL_ARCHIVE}" -C /opt
+            sudo tar xJf "/tmp/${MUSL_ARCHIVE}" -C /opt
             rm -f "/tmp/${MUSL_ARCHIVE}"
-            echo "/opt/aarch64-linux-musl-cross/bin" >> $GITHUB_PATH
+            echo "/opt/aarch64-unknown-linux-musl/bin" >> $GITHUB_PATH
           fi
 
       - name: Configure linker for musl ARM64
