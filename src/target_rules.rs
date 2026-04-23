@@ -598,14 +598,24 @@ pub struct NetAcl {
 }
 
 /// 将外部 ACL 接口数据转换为 target_rules YAML 格式字符串
+///
+/// 生成顺序：BlockDomains → PassDomains → BlockIPs → PassIPs
+///
+/// 由于规则引擎采用 min-priority-wins 语义（越靠前优先级越高），Block 规则排在
+/// 对应 Pass 规则之前意味着：当同一目标同时出现在 Block 和 Pass 列表中时，Block 胜出。
+/// 这符合安全优先原则——显式阻止的条目不应被放行列表意外覆盖。
+///
+/// 实际上 Block 和 Pass 列表通常不会包含同一条目（接口侧保证），此顺序仅作为
+/// 异常数据的兜底策略。正常场景下 Block 和 Pass 匹配的是不同目标，互不影响。
 pub fn convert_acl_to_yaml(acl: &NetAcl) -> String {
     let mut lines = Vec::new();
     lines.push("# 此文件由代理服务器自动生成，请勿手动修改".to_string());
     lines.push("# 数据来源：外部 ACL 接口定期拉取".to_string());
+    lines.push("# 生成顺序：Block 优先于 Pass（安全优先，同一条目同时出现时 Block 胜出）".to_string());
     lines.push(String::new());
     lines.push("target_rules:".to_string());
 
-    // BlockDomains: 以 '.' 开头的为后缀匹配，否则为精确匹配
+    // BlockDomains: 以 '.' 开头的为后缀匹配，否则为精确匹配（排在 Pass 之前，安全优先）
     for domain in &acl.block_domains {
         if let Some(suffix) = domain.strip_prefix('.') {
             lines.push(format!("  - [DOMAIN-SUFFIX, {}, 0, 65535, BLOCK, 1]", suffix));
@@ -623,7 +633,7 @@ pub fn convert_acl_to_yaml(acl: &NetAcl) -> String {
         }
     }
 
-    // BlockIPs: CIDR 阻止
+    // BlockIPs: CIDR 阻止（排在 PassIPs 之前，安全优先）
     for cidr in &acl.block_ips {
         lines.push(format!("  - [IPCIDR, {}, 0, 65535, BLOCK, 1]", cidr));
     }
@@ -798,8 +808,11 @@ impl TargetRuleControl {
     ///
     /// 定期从 `fetch_url` 拉取 ACL 数据，转换为 target-rules YAML 格式，
     /// 写入 `static_file`。文件变更后 watcher 会自动触发 reload。
+    ///
+    /// 此方法不持有 `Self` 的引用——fetch task 仅负责写入文件，
+    /// 规则 reload 由 file watcher 独立触发，保持职责分离。
     pub fn start_fetch_task(
-        self: &Arc<Self>,
+        &self,
         fetch_url: String,
         interval: Duration,
         cancel_token: CancellationToken,
@@ -817,8 +830,12 @@ impl TargetRuleControl {
         );
 
         tokio::spawn(async move {
+            // 内存缓存：记录上次拉取的 YAML 内容，用于对比去重
+            let mut last_yaml: Option<String> = None;
+
             // 首次立即拉取
-            Self::fetch_and_write_static(&client, &fetch_url, &static_file).await;
+            last_yaml = Self::fetch_and_write_static(&client, &fetch_url, &static_file, last_yaml.as_deref()).await
+                .or(last_yaml);
 
             let mut tick = tokio::time::interval(interval);
             tick.tick().await; // 跳过首次立即触发的 tick
@@ -830,7 +847,8 @@ impl TargetRuleControl {
                         break;
                     }
                     _ = tick.tick() => {
-                        Self::fetch_and_write_static(&client, &fetch_url, &static_file).await;
+                        last_yaml = Self::fetch_and_write_static(&client, &fetch_url, &static_file, last_yaml.as_deref()).await
+                            .or(last_yaml);
                     }
                 }
             }
@@ -839,59 +857,79 @@ impl TargetRuleControl {
 
     /// 从外部 ACL 接口拉取数据并写入静态规则文件
     ///
-    /// 写入成功后由 file watcher 自动检测变更并触发 reload（防抖 500ms），
-    /// 不在此处主动 reload，避免双重 reload。
+    /// 首次拉取时将数据记录到内存缓存；后续拉取如果数据与缓存一致则跳过写入，
+    /// 数据不一致时更新缓存并写入文件，由 file watcher 自动触发 reload（防抖 500ms）。
+    ///
+    /// 返回 `Some(yaml)` 表示本次数据已变更并成功写入（调用方更新缓存），
+    /// 返回 `None` 表示数据未变更或发生错误（调用方保留旧缓存）。
     async fn fetch_and_write_static(
         client: &AclHttpClient,
         fetch_url: &str,
         static_file: &Path,
-    ) {
-        match Self::fetch_acl(client, fetch_url).await {
-            Ok(yaml_content) => {
-                // 校验生成的 YAML 可被正确解析为规则，防止恶意/异常数据破坏静态规则文件
-                if let Err(e) = Self::validate_yaml_rules(&yaml_content) {
-                    error!(
-                        error = %e,
-                        url = %fetch_url,
-                        "Generated YAML from remote ACL is invalid, keeping previous static rules"
-                    );
-                    return;
-                }
-                // 原子写入：先写临时文件再 rename，避免写入中途崩溃留下半截文件
-                let tmp_file = static_file.with_extension("yaml.tmp");
-                match tokio::fs::write(&tmp_file, &yaml_content).await {
-                    Ok(()) => {
-                        if let Err(e) = tokio::fs::rename(&tmp_file, static_file).await {
-                            error!(
-                                error = %e,
-                                tmp = %tmp_file.display(),
-                                target = %static_file.display(),
-                                "Failed to rename tmp file to static target rules file"
-                            );
-                            // 清理临时文件
-                            let _ = tokio::fs::remove_file(&tmp_file).await;
-                        } else {
-                            info!(
-                                path = %static_file.display(),
-                                "Static target rules file updated from remote ACL, watcher will trigger reload"
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        error!(
-                            error = %e,
-                            path = %tmp_file.display(),
-                            "Failed to write tmp static target rules file"
-                        );
-                    }
-                }
-            }
+        last_yaml: Option<&str>,
+    ) -> Option<String> {
+        let yaml_content = match Self::fetch_acl(client, fetch_url).await {
+            Ok(content) => content,
             Err(e) => {
                 warn!(
                     error = %e,
                     url = %fetch_url,
                     "Failed to fetch ACL from remote, keeping previous static rules"
                 );
+                return None;
+            }
+        };
+
+        // 与内存缓存对比：数据未变化则跳过后续写入步骤
+        if let Some(last) = last_yaml {
+            if last == yaml_content {
+                info!(
+                    url = %fetch_url,
+                    "Remote ACL data unchanged, skipping static rules update"
+                );
+                return None;
+            }
+        }
+
+        // 校验生成的 YAML 可被正确解析为规则，防止恶意/异常数据破坏静态规则文件
+        if let Err(e) = Self::validate_yaml_rules(&yaml_content) {
+            error!(
+                error = %e,
+                url = %fetch_url,
+                "Generated YAML from remote ACL is invalid, keeping previous static rules"
+            );
+            return None;
+        }
+
+        // 原子写入：先写临时文件再 rename，避免写入中途崩溃留下半截文件
+        let tmp_file = static_file.with_extension("yaml.tmp");
+        match tokio::fs::write(&tmp_file, &yaml_content).await {
+            Ok(()) => {
+                if let Err(e) = tokio::fs::rename(&tmp_file, static_file).await {
+                    error!(
+                        error = %e,
+                        tmp = %tmp_file.display(),
+                        target = %static_file.display(),
+                        "Failed to rename tmp file to static target rules file"
+                    );
+                    // 清理临时文件
+                    let _ = tokio::fs::remove_file(&tmp_file).await;
+                    None
+                } else {
+                    info!(
+                        path = %static_file.display(),
+                        "Static target rules file updated from remote ACL, watcher will trigger reload"
+                    );
+                    Some(yaml_content)
+                }
+            }
+            Err(e) => {
+                error!(
+                    error = %e,
+                    path = %tmp_file.display(),
+                    "Failed to write tmp static target rules file"
+                );
+                None
             }
         }
     }
@@ -926,9 +964,13 @@ impl TargetRuleControl {
             )));
         }
 
-        let body = response.into_body().collect().await.map_err(|e| {
+        // 限制响应体大小为 10MB，防止异常/恶意响应导致 OOM
+        const MAX_RESPONSE_SIZE: usize = 10 * 1024 * 1024;
+        let limited_body = http_body_util::Limited::new(response.into_body(), MAX_RESPONSE_SIZE);
+        let body = limited_body.collect().await.map_err(|e| {
             SocksError::TargetRulesConfig(format!(
-                "Failed to read response body from {}: {}", url, e
+                "Failed to read response body from {} (limit {}MB): {}",
+                url, MAX_RESPONSE_SIZE / 1024 / 1024, e
             ))
         })?;
         let bytes = body.to_bytes();
