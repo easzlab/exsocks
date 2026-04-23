@@ -2,8 +2,10 @@
 
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::time::Duration;
 
 use tokio::net::TcpStream;
+use tracing::debug;
 
 use crate::dns_cache::DnsCache;
 use crate::error::SocksError;
@@ -90,32 +92,95 @@ impl fmt::Display for Address {
 }
 
 impl Address {
-    /// 直接建立 TCP 连接，避免 IPv4/IPv6 地址经过 format → parse 的不必要堆分配。
+    /// 建立 TCP 连接。
     ///
-    /// 域名场景下，若提供了 `dns_cache`，则优先使用缓存的 DNS 解析结果；
-    /// 否则回退到 `TcpStream::connect((domain, port))` 的默认行为。
+    /// - **IPv4/IPv6**：直接连接，避免 format → parse 的不必要堆分配。
+    /// - **域名**：若提供了 `dns_cache`，先通过缓存获取 IP 地址列表，
+    ///   再依次尝试连接（每个 IP 有独立的 `connect_timeout`）；
+    ///   否则回退到 `TcpStream::connect((domain, port))` 的默认行为。
+    ///
+    /// `connect_timeout` 控制每个单独 IP 地址的 TCP 连接超时，
+    /// 调用方应在外层施加总体超时兜底。
     pub async fn connect(
         &self,
         port: u16,
         dns_cache: Option<&DnsCache>,
+        connect_timeout: Duration,
     ) -> Result<TcpStream, SocksError> {
         match self {
             Address::IPv4(addr) => {
                 let sock_addr = SocketAddr::new(IpAddr::V4(*addr), port);
-                Ok(TcpStream::connect(sock_addr).await?)
+                Self::connect_with_timeout(sock_addr, connect_timeout).await
             }
             Address::IPv6(addr) => {
                 let sock_addr = SocketAddr::new(IpAddr::V6(*addr), port);
-                Ok(TcpStream::connect(sock_addr).await?)
+                Self::connect_with_timeout(sock_addr, connect_timeout).await
             }
             Address::Domain(domain) => {
                 if let Some(cache) = dns_cache {
-                    cache.resolve(domain, port).await
+                    let addrs = cache.resolve(domain).await?;
+                    Self::try_connect(&addrs, port, connect_timeout).await
                 } else {
                     Ok(TcpStream::connect((domain.as_str(), port)).await?)
                 }
             }
         }
+    }
+
+    /// 对单个 `SocketAddr` 执行带超时的 TCP 连接
+    async fn connect_with_timeout(
+        addr: SocketAddr,
+        connect_timeout: Duration,
+    ) -> Result<TcpStream, SocksError> {
+        match tokio::time::timeout(connect_timeout, TcpStream::connect(addr)).await {
+            Ok(Ok(stream)) => Ok(stream),
+            Ok(Err(e)) => Err(SocksError::Io(e)),
+            Err(_) => Err(SocksError::Io(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("connect to {} timed out", addr),
+            ))),
+        }
+    }
+
+    /// 依次尝试连接 IP 地址列表中的每个 IP，每个 IP 有独立的连接超时。
+    /// Per-IP 超时 = 总超时 / IP 数量，确保在外层 `connect_timeout` 内所有 IP 都有机会被尝试。
+    /// 不设下限——外层 `server.rs` 的 `timeout()` 作为总体兜底，
+    /// 避免 IP 数量多时 per-IP 下限累加导致靠后的 IP 永远无法被尝试到。
+    /// 返回第一个成功的 `TcpStream`，全部失败时返回最后一个错误。
+    async fn try_connect(
+        addrs: &[IpAddr],
+        port: u16,
+        connect_timeout: Duration,
+    ) -> Result<TcpStream, SocksError> {
+        let per_ip_timeout = if addrs.len() > 1 {
+            connect_timeout / addrs.len() as u32
+        } else {
+            connect_timeout
+        };
+        let mut last_err = None;
+        for ip in addrs {
+            let sock_addr = SocketAddr::new(*ip, port);
+            match tokio::time::timeout(per_ip_timeout, TcpStream::connect(sock_addr)).await {
+                Ok(Ok(stream)) => return Ok(stream),
+                Ok(Err(e)) => {
+                    debug!(addr = %sock_addr, error = %e, "Connect attempt failed");
+                    last_err = Some(e);
+                }
+                Err(_) => {
+                    debug!(addr = %sock_addr, "Connect attempt timed out");
+                    last_err = Some(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        format!("connect to {} timed out", sock_addr),
+                    ));
+                }
+            }
+        }
+        Err(SocksError::Io(last_err.unwrap_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::AddrNotAvailable,
+                "no addresses to connect",
+            )
+        })))
     }
 }
 

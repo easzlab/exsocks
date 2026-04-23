@@ -56,12 +56,16 @@ pub async fn run_with_listener(
         let cache = Arc::new(DnsCache::new(
             Duration::from_secs(config.dns_cache_ttl),
             Duration::from_secs(config.dns_cache_negative_ttl),
+            Duration::from_secs(config.dns_resolve_timeout),
             config.dns_cache_max_entries,
+            &config.dns_resolve_server,
         ));
         info!(
             ttl = config.dns_cache_ttl,
             negative_ttl = config.dns_cache_negative_ttl,
+            resolve_timeout = config.dns_resolve_timeout,
             max_entries = config.dns_cache_max_entries,
+            dns_server = if config.dns_resolve_server.is_empty() { "system" } else { &config.dns_resolve_server },
             "DNS cache enabled"
         );
         Some(cache)
@@ -283,7 +287,7 @@ async fn handle_connection(
 
     let target = match timeout(
         connect_timeout,
-        request.address.connect(request.port, dns_cache.as_deref()),
+        request.address.connect(request.port, dns_cache.as_deref(), connect_timeout),
     )
     .await
     {

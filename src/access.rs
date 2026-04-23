@@ -67,11 +67,18 @@ impl AccessControl {
     pub fn load(path: impl AsRef<Path>) -> Result<Self, SocksError> {
         let path = path.as_ref().to_path_buf();
         let rules = Self::parse_file(&path)?;
-        info!(
-            path = %path.display(),
-            rules = rules.rule_count(),
-            "Access control rules loaded"
-        );
+        if rules.rule_count() == 0 {
+            warn!(
+                path = %path.display(),
+                "Access control enabled but whitelist is empty, ALL connections will be rejected"
+            );
+        } else {
+            info!(
+                path = %path.display(),
+                rules = rules.rule_count(),
+                "Access control rules loaded"
+            );
+        }
         Ok(Self {
             rules: ArcSwap::new(Arc::new(rules)),
             path,

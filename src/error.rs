@@ -32,6 +32,9 @@ pub enum SocksError {
     #[error("Invalid address format: {0}")]
     InvalidAddress(String),
 
+    #[error("DNS resolution failed (cached): {0}")]
+    CachedDnsFailure(String),
+
     #[error("Authentication failed for user: {0}")]
     AuthenticationFailed(String),
 
@@ -40,9 +43,6 @@ pub enum SocksError {
 
     #[error("User config error: {0}")]
     UserConfig(String),
-
-    #[error("Access denied for client: {0}")]
-    AccessDenied(std::net::IpAddr),
 
     #[error("Access config error: {0}")]
     AccessConfig(String),

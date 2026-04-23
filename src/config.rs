@@ -44,6 +44,18 @@ fn default_dns_cache_negative_ttl() -> u64 {
     30
 }
 
+/// 默认 DNS 解析超时：5 秒
+///
+/// 单次 DNS 解析的超时时间，防止系统 DNS 解析器无限阻塞
+fn default_dns_resolve_timeout() -> u64 {
+    5
+}
+
+/// 默认 DNS 解析服务器：空字符串表示使用系统默认
+fn default_dns_resolve_server() -> String {
+    String::new()
+}
+
 /// 默认日志最大保留文件数：7
 ///
 /// 按天滚动时相当于保留最近 7 天的日志
@@ -118,6 +130,13 @@ pub struct AppConfig {
     /// DNS 负缓存 TTL（秒），解析失败时缓存的时间，默认 30
     #[serde(default = "default_dns_cache_negative_ttl")]
     pub dns_cache_negative_ttl: u64,
+    /// DNS 解析超时（秒），单次 DNS 解析的超时时间，默认 5
+    #[serde(default = "default_dns_resolve_timeout")]
+    pub dns_resolve_timeout: u64,
+    /// 自定义 DNS 解析服务器地址，如 "8.8.8.8" 或 "1.1.1.1"
+    /// 空字符串表示使用系统默认 DNS 解析器
+    #[serde(default = "default_dns_resolve_server")]
+    pub dns_resolve_server: String,
     /// 是否启用用户名/密码认证（RFC1929），默认 false
     /// 启用后客户端必须提供有效的用户名和密码
     /// 未启用时同时接受无认证和用户名密码认证，但不校验凭证
@@ -199,6 +218,11 @@ impl AppConfig {
                 "dns_cache_negative_ttl",
                 default_dns_cache_negative_ttl() as i64,
             )?
+            .set_default(
+                "dns_resolve_timeout",
+                default_dns_resolve_timeout() as i64,
+            )?
+            .set_default("dns_resolve_server", default_dns_resolve_server())?
             .set_default("auth_enabled", false)?
             .set_default(
                 "auth_user_file",
@@ -296,6 +320,8 @@ impl Default for AppConfig {
             dns_cache_ttl: default_dns_cache_ttl(),
             dns_cache_max_entries: default_dns_cache_max_entries(),
             dns_cache_negative_ttl: default_dns_cache_negative_ttl(),
+            dns_resolve_timeout: default_dns_resolve_timeout(),
+            dns_resolve_server: default_dns_resolve_server(),
             auth_enabled: false,
             auth_user_file: default_auth_user_file(),
             access_enabled: false,
@@ -331,6 +357,7 @@ mod tests {
         assert_eq!(config.dns_cache_ttl, 300);
         assert_eq!(config.dns_cache_max_entries, 1024);
         assert_eq!(config.dns_cache_negative_ttl, 30);
+        assert_eq!(config.dns_resolve_server, "");
         assert!(!config.target_rules_enabled);
         assert_eq!(config.dynamic_target_rules_file, PathBuf::from("dynamic-target-rules.yaml"));
         assert_eq!(config.static_target_rules_file, PathBuf::from("static-target-rules.yaml"));
