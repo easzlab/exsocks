@@ -282,10 +282,13 @@ async fn handle_connection(
             counter!(TARGET_RULE_TOTAL, "action" => "block").increment(1);
             let dummy_addr = std::net::SocketAddr::from(([0, 0, 0, 0], 0));
             socks5::send_reply(&mut socket, REP_CONNECTION_NOT_ALLOWED, dummy_addr).await?;
-            return Err(SocksError::TargetDenied(
-                request.address.to_string(),
-                request.port,
-            ));
+            if result.log {
+                return Err(SocksError::TargetDenied(
+                    request.address.to_string(),
+                    request.port,
+                ));
+            }
+            return Ok(());
         }
     }
 
