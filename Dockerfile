@@ -111,4 +111,4 @@ COPY example ./
 # 从构建阶段复制二进制文件
 COPY --from=builder /app/target/*/release/exsocks /app/exsocks
 
-CMD ["/app/exsocks", "-c", "server.yaml"]
+CMD ["/app/exsocks", "-c", "config/server.yaml"]

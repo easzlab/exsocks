@@ -1,0 +1,44 @@
+version: "3.8"
+
+services:
+  exsocks:
+    image: exsocks:latest
+    container_name: exsocks
+    restart: unless-stopped
+    ports:
+      # SOCKS5 代理端口
+      - "1080:1080"
+      # Prometheus metrics 端口（按需开启）
+      # - "9190:9190"
+    volumes:
+      # 配置文件目录
+      - ./config/server.yaml:/app/server.yaml:ro
+      # 用户认证文件（启用 auth_enabled 时需要）
+      - ./config/user.yaml:/app/user.yaml:ro
+      # 客户端白名单（启用 access_enabled 时需要）
+      - ./config/client-rules.yaml:/app/client-rules.yaml:ro
+      # 目标规则文件（启用 target_rules_enabled 时需要）
+      - ./config/dynamic-target-rules.yaml:/app/dynamic-target-rules.yaml:ro
+      - ./config/static-target-rules.yaml:/app/static-target-rules.yaml
+      # 日志持久化
+      - ./logs:/app/logs
+    environment:
+      # 通过环境变量覆盖配置（可选）
+      # EXSOCKS_BIND: "0.0.0.0:1080"
+      # EXSOCKS_LOG_LEVEL: "info"
+      RUST_LOG: "info"
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "--socks5", "127.0.0.1:1080", "http://httpbin.org/ip", "||", "exit", "1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"

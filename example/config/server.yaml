@@ -91,7 +91,7 @@ auth_enabled: false
 # 该文件支持热加载，修改后自动生效，无需重启服务
 # 仅在 auth_enabled 为 true 时生效
 # 默认: "user.yaml"
-auth_user_file: "user.yaml"
+auth_user_file: "config/user.yaml"
 
 # ========== 客户端源地址白名单配置 ==========
 
@@ -106,7 +106,7 @@ access_enabled: false
 # 该文件支持热加载，修改后自动生效，无需重启服务
 # 仅在 access_enabled 为 true 时生效
 # 默认: "client-rules.yaml"
-access_file: "client-rules.yaml"
+access_file: "config/client-rules.yaml"
 
 # ========== 目标地址规则管控配置 ==========
 
@@ -123,7 +123,7 @@ target_rules_enabled: false
 # 该文件支持热加载，修改后自动生效，无需重启服务
 # 仅在 target_rules_enabled 为 true 时生效
 # 默认: "dynamic-target-rules.yaml"
-dynamic_target_rules_file: "dynamic-target-rules.yaml"
+dynamic_target_rules_file: "config/dynamic-target-rules.yaml"
 
 # 静态目标地址规则配置文件路径（外部接口拉取，低优先级）
 # 由代理服务器定期向外部接口请求后自动生成，优先级低于动态规则
@@ -131,7 +131,7 @@ dynamic_target_rules_file: "dynamic-target-rules.yaml"
 # 仅在 target_rules_enabled 为 true 时生效
 # ⚠️ 启用远程拉取后，此文件内容将被拉取结果完全覆盖，不要手动编辑
 # 默认: "static-target-rules.yaml"
-static_target_rules_file: "static-target-rules.yaml"
+static_target_rules_file: "config/static-target-rules.yaml"
 
 # 是否启用定期从外部接口拉取静态规则
 # 启用后将定期请求 static_target_rules_fetch_url 获取 ACL 数据
