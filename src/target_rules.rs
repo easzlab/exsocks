@@ -424,11 +424,11 @@ impl TargetRuleSet {
                 opt_value: rule.opt_value,
                 matched_rule: Some(rule.rule_desc.clone()),
             },
-            // 默认 BLOCK，不记录日志
+            // 默认 BLOCK，记录日志
             None => MatchResult {
                 allowed: false,
-                log: false,
-                opt_flags: 0,
+                log: true,
+                opt_flags: OPT_LOG,
                 opt_value: 0.0,
                 matched_rule: None,
             },
@@ -1506,10 +1506,12 @@ mod tests {
 
         let result = rs.check(&Address::Domain("example.com".to_string()), 80);
         assert!(!result.allowed);
-        assert!(!result.log);
+        assert!(result.log);
+        assert_eq!(result.opt_flags, OPT_LOG);
 
         let result = rs.check(&Address::IPv4(Ipv4Addr::new(1, 2, 3, 4)), 80);
         assert!(!result.allowed);
+        assert!(result.log);
     }
 
     // ===== opt_flags / opt_value 测试 =====

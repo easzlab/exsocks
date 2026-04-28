@@ -520,8 +520,8 @@ fn test_empty_rules_default_block() {
 
     let result = rs.check(&Address::Domain("example.com".to_string()), 80);
     assert!(!result.allowed);
-    assert!(!result.log);
-    assert_eq!(result.opt_flags, 0);
+    assert!(result.log);
+    assert_eq!(result.opt_flags, OPT_LOG);
 
     let result = rs.check(&Address::IPv4(Ipv4Addr::new(1, 2, 3, 4)), 80);
     assert!(!result.allowed);

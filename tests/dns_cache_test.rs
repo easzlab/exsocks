@@ -229,7 +229,7 @@ async fn test_resolve_with_custom_dns_server() {
         Duration::from_secs(30),
         Duration::from_secs(5),
         1024,
-        "8.8.8.8",
+        "223.5.5.5",
     );
     assert!(cache.is_empty());
 

@@ -269,11 +269,11 @@ async fn handle_connection(
     if let Some(trc) = &target_rule_control {
         let result = trc.rules().check(&request.address, request.port);
         if result.log {
-            let rule_desc = result.matched_rule.as_deref().unwrap_or("unknown");
+            let rule_desc = result.matched_rule.as_deref().unwrap_or("default");
             if result.allowed {
                 debug!(target = %request.address, port = request.port, rule = rule_desc, "Target PASS by rule");
             } else {
-                debug!(target = %request.address, port = request.port, rule = rule_desc, "Target BLOCKED by rule");
+                warn!(target = %request.address, port = request.port, rule = rule_desc, "Target BLOCKED by rule");
             }
         }
         if result.allowed {
@@ -282,12 +282,6 @@ async fn handle_connection(
             counter!(TARGET_RULE_TOTAL, "action" => "block").increment(1);
             let dummy_addr = std::net::SocketAddr::from(([0, 0, 0, 0], 0));
             socks5::send_reply(&mut socket, REP_CONNECTION_NOT_ALLOWED, dummy_addr).await?;
-            if result.log {
-                return Err(SocksError::TargetDenied(
-                    request.address.to_string(),
-                    request.port,
-                ));
-            }
             return Ok(());
         }
     }
